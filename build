@@ -1,0 +1,37 @@
+#!/bin/sh
+
+build() {
+	#Copy configuration files over to bin directory
+	cp config/* bin/config
+	#Move to the bld directory to avoid dumping cmake files into the 
+	#source tree
+	cd cmake
+	cmake -DCMAKE_BUILD_TYPE=Debug ..
+	make
+}
+
+clean() {
+	#Remove all of the cmake artifacts from the
+	#bld directory. Remove all non-directories 
+	#from under bin
+	rm -rf cmake/*
+	find bin -type f | xargs rm
+}
+
+#If we're running with no arguments, then just do a normal build
+if [ $# -eq 0 ]; then
+	build
+else
+	#Loop through all arguments, though we're only handling "clean" 
+	#at the moment.
+	for i in "$@" 
+	do
+		case $i in
+			clean)
+				clean;;
+			all)
+				clean
+				build;;
+		esac
+	done
+fi
