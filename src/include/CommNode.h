@@ -25,6 +25,9 @@ class CommNode {
 		bool running;
 		boost::asio::io_service io;		
 		bai::udp::socket socket;
+		void udpReceive();
+		void handleUDPReceive(const boost::system::error_code& error,
+			std::size_t);
 };
 
 #endif
