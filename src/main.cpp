@@ -27,9 +27,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
 
-//Some variables declared before main to be used by both Windows and 
-//Linux implementations
-CommNodeLog* cnLog = CommNodeLog::getInstance();
+extern CommNodeLog* cnLog;
 boost::property_tree::ptree pt;
 
 //This struct holds properties passed in from the configuration file

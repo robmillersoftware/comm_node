@@ -1,6 +1,8 @@
 #include "CommNode.h"
 #include <boost/uuid/uuid_generators.hpp>
-#include <iostream>
+#include "CommNodeLog.h"
+
+extern CommNodeLog* cnLog;
 
 //These variables are local to the implementation of this class and are not
 //meant to be referenced outside of this file.
@@ -42,6 +44,8 @@ void CommNode::update() {
 		std::array<char, 3> arr = {"yo"};
 		socket.send_to(boost::asio::buffer(arr, 2), senderEndpoint);
 		socket.close(error);
+
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Message sent!");
 	}
 }
 
@@ -56,7 +60,7 @@ void CommNode::udpReceive() {
 void CommNode::handleUDPReceive(const boost::system::error_code& error,
 																	std::size_t) {
 	if (!error || error == boost::asio::error::message_size) {
-		std::cout << "Got a message!";
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Got a message!");
 		udpReceive();
 	}
 }
