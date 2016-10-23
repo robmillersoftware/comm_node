@@ -27,14 +27,25 @@ void CommNode::stop() {
 }
 
 void CommNode::startListeningUDP() {
-	pthread_create(&udpThread, NULL, &CommNode::handleUDP, this);	
+	int ret = pthread_create(&udpThread, NULL, &CommNode::handleUDP, this);	
+
+	if (ret) {
+		char msg[512];
+		sprintf(msg, "Error creating POSIX thread: %d", ret);
+		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR,
+			msg);
+	} else {
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Successfully created UDP server thread");
+	}
 }
 
 void* CommNode::handleUDP() {
 	socklen_t fromLen = sizeof adr;
-
+	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "inside handleUDP");
 	while (running) {
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "inside while loop");
 		int ret = recvfrom(udpSock, udpDgram, sizeof udpDgram, 0, (struct sockaddr*)&adr, &fromLen);
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "got message on socket");
 		if (ret < 0) {
 			char msg[256];
 			sprintf(msg, "Error receiving UDP packet: %s", std::strerror(errno));
