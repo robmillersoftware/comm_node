@@ -34,16 +34,12 @@ void CommNode::startListeningUDP() {
 		sprintf(msg, "Error creating POSIX thread: %d", ret);
 		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR,
 			msg);
-	} else {
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Successfully created UDP server thread");
 	}
 }
 
 void* CommNode::handleUDP() {
 	socklen_t fromLen = sizeof adr;
-	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "inside handleUDP");
 	while (running) {
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "inside while loop");
 		int ret = recvfrom(udpSock, udpDgram, sizeof udpDgram, 0, (struct sockaddr*)&adr, &fromLen);
 		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "got message on socket");
 		if (ret < 0) {
@@ -58,9 +54,15 @@ void* CommNode::handleUDP() {
 }
 
 void CommNode::sendHeartbeat() {
+	setsockopt(udpSock, SOL_SOCKET, SO_BROADCAST, &so_reuseaddr, sizeof so_reuseaddr);
+
+	char buff[512];
+	sprintf(buff, "hello?");
+	sendto(udpSock, buff, strlen(buff), 0, (struct sockaddr*)&adr, len_inet);
 }
 
 void CommNode::update() {
+	sendHeartbeat();
 	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Message sent!");
 }
 
