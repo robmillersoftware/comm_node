@@ -3,64 +3,86 @@
 #include "CommNodeLog.h"
 
 extern CommNodeLog* cnLog;
+extern int mkaddr(void* addr, int* addrlen,
+	char* str_addr, char* protocol);
 
-//These variables are local to the implementation of this class and are not
-//meant to be referenced outside of this file.
-std::array<char, 1> recvBuffer;
-bai::udp::endpoint remoteEndpoint;
-
-CommNode::CommNode(): socket(io) {
+CommNode::CommNode() {
 	uuid = boost::uuids::random_generator()();
 }
 
-CommNode::CommNode(int port): socket(io) {
+CommNode::CommNode(int port) {
 	portNumber = port;
 	uuid = boost::uuids::random_generator()();
+	bc_addr = "127.255.255.2:" + std::to_string(portNumber);
+	setUpUDPSocket();
 }
 
 void CommNode::start() {
 	running = true;
-
-	//Start UDP portion of the server
-	udpReceive();
-	io.run();
+	startListeningUDP();
 }
 
 void CommNode::stop() {
 	running = false;
-	io.stop();
 }
+
+void CommNode::startListeningUDP() {
+	pthread_create(&udpThread, NULL, &CommNode::handleUDP, this);	
+}
+
+void* CommNode::handleUDP() {
+	socklen_t fromLen = sizeof adr;
+
+	while (running) {
+		int ret = recvfrom(udpSock, udpDgram, sizeof udpDgram, 0, (struct sockaddr*)&adr, &fromLen);
+		if (ret < 0) {
+			char msg[256];
+			sprintf(msg, "Error receiving UDP packet: %s", std::strerror(errno));
+			cnLog->writeMessage(CommNodeLog::severities::CN_ERROR, msg);
+			return NULL;
+		}
+
+		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Recieved a message: ");
+	}	
+}
+
+void CommNode::sendHeartbeat() {
+}
+
 void CommNode::update() {
-	boost::system::error_code error;
-	socket.open(bai::udp::v4(), error);
+	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Message sent!");
+}
 
-	if (!error) {
-		socket.set_option(bai::udp::socket::reuse_address(true));
-		socket.set_option(boost::asio::socket_base::broadcast(true));
-
-		bai::udp::endpoint senderEndpoint(
-			boost::asio::ip::address_v4::broadcast(), portNumber);
-
-		std::array<char, 3> arr = {"yo"};
-		socket.send_to(boost::asio::buffer(arr, 2), senderEndpoint);
-		socket.close(error);
-
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Message sent!");
+void CommNode::setUpUDPSocket() {
+	udpSock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (udpSock == -1) {
+		char errMsg[256];
+		sprintf(errMsg, "Error opening UDP socket: %s", std::strerror(errno));
+		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR, errMsg);
 	}
-}
+	len_inet = sizeof adr;
 
-void CommNode::udpReceive() {
-	socket.async_receive_from(
-		boost::asio::buffer(recvBuffer), remoteEndpoint,
-		boost::bind(&CommNode::handleUDPReceive,this,
-		boost::asio::placeholders::error,
-		boost::asio::placeholders::bytes_transferred)); 
-}
+	int ret = mkaddr(&adr, &len_inet, const_cast<char*>(bc_addr.c_str()), const_cast<char*>("udp"));
+	
+	if (ret == -1) {
+		char errMsg[256];
+		sprintf(errMsg, "Error setting broadcast address: %s", std::strerror(errno));
+		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR, errMsg);
+	}
 
-void CommNode::handleUDPReceive(const boost::system::error_code& error,
-																	std::size_t) {
-	if (!error || error == boost::asio::error::message_size) {
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, "Got a message!");
-		udpReceive();
+	ret = setsockopt(udpSock, SOL_SOCKET, SO_REUSEADDR, &so_reuseaddr, sizeof(so_reuseaddr));
+
+	if (ret == -1) {
+		char errMsg[256];
+		sprintf(errMsg, "Error setting socket options: %s", std::strerror(errno));
+		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR, errMsg);
+	}
+
+	ret = bind(udpSock, (struct sockaddr*)&adr, len_inet);
+
+	if (ret == -1) {
+		char errMsg[256];
+		sprintf(errMsg, "Error binding socket to broadcast address: %s", std::strerror(errno));
+		cnLog->writeMessage(CommNodeLog::severities::CN_ERROR, errMsg);
 	}
 }

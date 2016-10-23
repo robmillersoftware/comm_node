@@ -8,7 +8,7 @@ find_package(Threads)
 find_package(Boost 1.60.0 COMPONENTS thread filesystem system REQUIRED)
 
 if (Boost_FOUND)
-	include_directories(${Boost_INCLUDE_DIRS} ./include)
+	include_directories(${Boost_INCLUDE_DIRS} include)
 	file(GLOB SRC "*.cpp")
 	add_executable(commNode ${SRC})
 	target_link_libraries(commNode ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
