@@ -5,6 +5,7 @@
 #include <fstream>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/posix_time/posix_time_io.hpp>
+#include <boost/filesystem.hpp>
 
 using namespace std;
 
@@ -51,6 +52,9 @@ class CommNodeLog {
 		void init(string newFile) {
 			fileName = newFile;
 			fileStream.close();
+
+			boost::filesystem::path dir(newFile);
+			boost::filesystem::create_directories(dir.parent_path());
 			fileStream.open(newFile);
 		}
 
