@@ -72,13 +72,13 @@
   * Set input defaults:
   */
   if ( !host_part ) {
-	host_part =  "*" ;
+	host_part =  const_cast<char*>("*");
   }
   if ( !port_part ) {
-	port_part =  "*" ;
+	port_part =  const_cast<char*>("*");
   }
   if ( !protocol ) {
-	protocol =  "tcp" ;
+	protocol =  const_cast<char*>("tcp");
   }
  
  /*

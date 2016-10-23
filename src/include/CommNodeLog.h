@@ -27,6 +27,12 @@ class CommNodeLog {
 			return instance;
 		}
 		
+		/**
+		 * Writes a message to the log with the passed in severity, current time, and
+		 * the message parameter.
+		 * @param sev This is an entry from the CommNodeLog::severities enum
+		 * @param msg The message the user wants to display in the log
+		 */
 		void writeMessage(severities sev, string msg) {
 			if (!fileStream.is_open()) {
 				if (fileName.length() == 0) {
@@ -49,6 +55,10 @@ class CommNodeLog {
 			fileStream.flush();
 		}
 
+		/**
+		 * Creates the directory for the log file if it doesn't already exist. Also 
+		 * opens the file stream for the logs.
+		 */
 		void init(string newFile) {
 			fileName = newFile;
 			fileStream.close();
@@ -61,6 +71,38 @@ class CommNodeLog {
 		void close() {
 			fileStream.close();
 		}
+
+		/*
+		 *	This function is a wrapper that sends an error message to the log then exits
+		 * 	the application. 
+		 *  @param msg 256 character max string
+		 */
+		void exitWithErrorMessage(std::string msg) {
+			//For storing error messages to send to the log
+			char errMsg[256];
+			sprintf(errMsg, "%s: %s", msg.c_str(), std::strerror(errno));
+			writeMessage(severities::CN_ERROR, errMsg);
+			exit(1);	
+		}
+
+		/**
+		 * These functions are shortcuts for calling writeMessage with a severity 
+		 * parameter
+		 */
+		void error(std::string msg) {
+			writeMessage(severities::CN_ERROR, msg);
+		}
+
+		void warning(std::string msg) {
+			writeMessage(severities::CN_WARNING, msg);
+		}
+		void debug(std::string msg) {
+			writeMessage(severities::CN_DEBUG, msg);
+		}
+		void info(std::string msg) {
+			writeMessage(severities::CN_INFO, msg);
+		}
+
 	private:
 		static CommNodeLog* instance;
 		ofstream fileStream;
