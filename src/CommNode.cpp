@@ -58,6 +58,7 @@ void* CommNode::handleBroadcast() {
 	sockaddr_in from;
 
 	while (running) {
+		memset(udpDgram, 0, sizeof udpDgram);
 		int ret = recvfrom(udpListenerFD, udpDgram, sizeof udpDgram, 0, (struct sockaddr*)&broadcastAddr, &fromLen);
 		if (ret < 0) {
 			char msg[256];
@@ -66,14 +67,21 @@ void* CommNode::handleBroadcast() {
 			running = false;
 		}
 
-		std::string dgram(udpDgram);
-		boost::algorithm::trim(dgram);
-		//boost::uuids::uuid neighborUUID = 
-			//boost::lexical_cast<boost::uuids::uuid>(dgram);
+		std::string neighbor(udpDgram);
+		boost::algorithm::trim(neighbor);
 
-		if (dgram != boost::uuids::to_string(uuid)) {
+		std::string myself = boost::uuids::to_string(uuid);
+
+		//The received packet should have the UUID of the originating node. Make sure
+		//it isn't coming from this one
+		if (myself.compare(neighbor)) {
 			char rcvd[1024];
-			sprintf(rcvd, "Received a message: %s", udpDgram);
+			char ip[INET_ADDRSTRLEN];
+
+			inet_ntop(AF_INET, &(broadcastAddr.sin_addr), ip, INET_ADDRSTRLEN);
+
+			sprintf(rcvd, "Received a message from %s with ip=\"%s\"", 
+				neighbor.c_str(), ip);
 			cnLog->debug(rcvd);
 		}
 	}	
