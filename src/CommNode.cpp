@@ -1,5 +1,6 @@
 #include "CommNode.h"
 #include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "CommNodeLog.h"
 
 //This external variable holds the instance to the CommNodeLog singleton
@@ -19,7 +20,7 @@ CommNode::CommNode(int port) {
 	
 //By default, everything is going to go through the loopback
 	listenerStr = "127.255.255.2:" + std::to_string(portNumber);
-	broadcastStr = "127.0.0.*:" + std::to_string(portNumber);
+	broadcastStr = "127.0.0.1:" + std::to_string(portNumber);
 
 	initBroadcastListener();
 	initBroadcastServer();
@@ -61,6 +62,7 @@ void CommNode::startBroadcastListener() {
  */
 void* CommNode::handleBroadcast() {
 	socklen_t fromLen = sizeof broadcastAddr;
+	sockaddr_in from;
 
 	while (running) {
 		int ret = recvfrom(udpListenerFD, udpDgram, sizeof udpDgram, 0, (struct sockaddr*)&broadcastAddr, &fromLen);
@@ -71,9 +73,14 @@ void* CommNode::handleBroadcast() {
 			running = false;
 		}
 
-		char rcvd[1024];
-		sprintf(rcvd, "Received a message: %s", udpDgram);
-		cnLog->debug(rcvd);
+		boost::uuids::uuid neighborUUID = 
+			boost::lexical_cast<boost::uuids::uuid>(udpDgram);
+
+		if (neighborUUID != uuid) {
+			char rcvd[1024];
+			sprintf(rcvd, "Received a message: %s", udpDgram);
+			cnLog->debug(rcvd);
+		}
 	}	
 }
 
@@ -82,7 +89,7 @@ void CommNode::sendHeartbeat() {
 	setsockopt(udpBroadcastFD, SOL_SOCKET, SO_BROADCAST, &enable, sizeof enable);
 
 	char buff[512];
-	sprintf(buff, "hello?");
+	sprintf(buff, "%s", boost::uuids::to_string(uuid).c_str());
 	sendto(udpBroadcastFD, buff, strlen(buff), 0, (struct sockaddr*)&listenerAddr, listenerLen);
 }
 
