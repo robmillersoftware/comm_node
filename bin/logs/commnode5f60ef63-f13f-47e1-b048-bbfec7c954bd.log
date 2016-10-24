@@ -1,0 +1,6 @@
+24-Oct-2016 16:26:19 (debug) Launching process with PID: 16352
+
+24-Oct-2016 16:26:19 (debug) Starting node with heartbeat every 10 seconds...
+24-Oct-2016 16:26:29 (debug) Message sent!
+terminate called after throwing an instance of 'boost::exception_detail::clone_impl<boost::exception_detail::error_info_injector<boost::bad_lexical_cast> >'
+  what():  bad lexical cast: source type value could not be interpreted as target

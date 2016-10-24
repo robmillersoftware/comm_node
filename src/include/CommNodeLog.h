@@ -35,11 +35,11 @@ class CommNodeLog {
 		 */
 		void writeMessage(severities sev, string msg) {
 			if (!fileStream.is_open()) {
-				if (fileName.length() == 0) {
+				if (logFilePath.length() == 0) {
 					cout << "Log file path not set. Call init() before trying " 
 							 << "to write to the log.";
 				} else {
-					cout << "Unable to open log file at path: " << fileName;
+					cout << "Unable to open log file at path: " << logFilePath;
 				}
 				return;
 			}
@@ -60,16 +60,39 @@ class CommNodeLog {
 		 * opens the file stream for the logs.
 		 */
 		void init(string newFile) {
-			fileName = newFile;
+			logFilePath = newFile;
 			fileStream.close();
 
 			boost::filesystem::path dir(newFile);
-			boost::filesystem::create_directories(dir.parent_path());
-			fileStream.open(newFile);
+
+			//If the file exists, just append to it
+			if (boost::filesystem::exists(newFile)) {
+				fileStream.open(newFile, std::ofstream::out | std::ofstream::app);
+			} else {
+				boost::filesystem::create_directories(dir.parent_path());
+				fileStream.open(newFile);
+			}
 		}
 
 		void close() {
 			fileStream.close();
+
+			//Archive the log when you are done with it
+			boost::filesystem::path logPath(logFilePath);
+			std::string logFile = logPath.filename().string();
+			std::stringstream newFileStream;
+
+			using namespace boost::posix_time;
+					
+			time_facet* facet = new time_facet("%H-%M-%S");
+			newFileStream.imbue(locale(newFileStream.getloc(), facet));
+
+			newFileStream << logPath.stem() << "_" << 
+				second_clock::local_time() << endl;
+			boost::filesystem::path logArchive(logPath.parent_path().string() + 
+				"archive/" + newFileStream.str());
+			boost::filesystem::create_directories(logArchive);
+			boost::filesystem::rename(logPath, logArchive);
 		}
 
 		/*
@@ -106,7 +129,7 @@ class CommNodeLog {
 	private:
 		static CommNodeLog* instance;
 		ofstream fileStream;
-		string fileName = "";
+		string logFilePath = "";
 		explicit CommNodeLog() {
 		}
 

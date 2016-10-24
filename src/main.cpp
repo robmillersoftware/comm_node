@@ -26,6 +26,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/algorithm/string.hpp>
 
 extern CommNodeLog* cnLog;
 boost::property_tree::ptree pt;
@@ -61,7 +62,25 @@ int main(int argc, char *argv[]) {
 	close(STDOUT_FILENO);
 	close(STDERR_FILENO);
 
-	loadConfigFile();
+	//We're now set up as a service, create node object and begin
+	CommNode c(properties.portNumber);
+	c.start();
+	
+	try {
+		loadConfigFile();
+	} catch(...) {
+		//TODO: Add exception handling
+		exit(1);
+	}
+	//Set up logging
+		
+	const std::string logFileName = pt.get<std::string>(
+		"NodeProperties.logFileName") + 
+		boost::uuids::to_string(c.getUUID()) + ".log";
+	std::stringstream ssPath;
+	ssPath << LOG_DIRECTORY << "/" << logFileName;
+	cnLog->init(ssPath.str());
+
 	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
 		"Launching process with PID: " + std::to_string(::getpid()) + "\n");
 	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
@@ -69,7 +88,6 @@ int main(int argc, char *argv[]) {
 		std::to_string(properties.heartbeatIntervalSecs) + 
 		" seconds...");
 
-	CommNode c(properties.portNumber);
 	c.start();
 
 	while(c.isRunning()) {
@@ -89,13 +107,6 @@ void loadConfigFile() {
 	boost::property_tree::ini_parser::read_ini(
 		PARENT_DIRECTORY "/config/CommNodeConfig.ini", pt);
 
-	//Set up logging
-	const std::string logFileName = pt.get<std::string>(
-		"NodeProperties.logFileName");
-	std::stringstream ssPath;
-	ssPath << LOG_DIRECTORY << "/" << logFileName;
-	cnLog->init(ssPath.str());
-
 	//Convert properties from std::strings to numbers
 	const std::string processName = pt.get<std::string>(
 		"NodeProperties.processName");
@@ -103,23 +114,12 @@ void loadConfigFile() {
 		"NodeProperties.portNumber");
 	const std::string heartbeatIntervalString = pt.get<std::string>(
 		"NodeProperties.heartbeatInterval");
-	
-	//If the user has specified a value for either of these in the 
-	//config file, use those. Otherwise write to the log and use the defaults.
-	try {
-		properties.portNumber = boost::lexical_cast<int>(portString);
-	} catch (boost::bad_lexical_cast const&) {
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
-			"No port number specified, continuing with default value of " + 
-			std::to_string(properties.portNumber));
-	}
 
-	try {
-		properties.heartbeatIntervalSecs = boost::lexical_cast<int>(
-			heartbeatIntervalString);
-	} catch (boost::bad_lexical_cast const&) {
-		cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
-			"No heartbeat interval specified, continuing with default value of " + 
-			std::to_string(properties.heartbeatIntervalSecs));
+	try {	
+		//properties.portNumber = boost::lexical_cast<int>(portString);
+		//properties.heartbeatIntervalSecs = boost::lexical_cast<int>(
+		//	heartbeatIntervalString);
+	} catch (boost::bad_lexical_cast&) {
+		//TODO: Add exception handling
 	}
 }

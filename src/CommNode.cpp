@@ -2,14 +2,11 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include "CommNodeLog.h"
+#include <ifaddrs.h>
+#include <boost/algorithm/string.hpp>
 
 //This external variable holds the instance to the CommNodeLog singleton
 extern CommNodeLog* cnLog;
-
-//The mkaddr function creates a socket address from a protocol and string 
-//representation
-extern int mkaddr(void* addr, int* addrlen,
-	char* str_addr, char* protocol);
 
 /*
  * This is the only constructor used by this application
@@ -18,10 +15,6 @@ CommNode::CommNode(int port) {
 	portNumber = port;
 	uuid = boost::uuids::random_generator()();
 	
-//By default, everything is going to go through the loopback
-	listenerStr = "127.255.255.2:" + std::to_string(portNumber);
-	broadcastStr = "127.0.0.1:" + std::to_string(portNumber);
-
 	initBroadcastListener();
 	initBroadcastServer();
 }
@@ -73,10 +66,12 @@ void* CommNode::handleBroadcast() {
 			running = false;
 		}
 
-		boost::uuids::uuid neighborUUID = 
-			boost::lexical_cast<boost::uuids::uuid>(udpDgram);
+		std::string dgram(udpDgram);
+		boost::algorithm::trim(dgram);
+		//boost::uuids::uuid neighborUUID = 
+			//boost::lexical_cast<boost::uuids::uuid>(dgram);
 
-		if (neighborUUID != uuid) {
+		if (dgram != boost::uuids::to_string(uuid)) {
 			char rcvd[1024];
 			sprintf(rcvd, "Received a message: %s", udpDgram);
 			cnLog->debug(rcvd);
@@ -90,7 +85,7 @@ void CommNode::sendHeartbeat() {
 
 	char buff[512];
 	sprintf(buff, "%s", boost::uuids::to_string(uuid).c_str());
-	sendto(udpBroadcastFD, buff, strlen(buff), 0, (struct sockaddr*)&listenerAddr, listenerLen);
+	sendto(udpBroadcastFD, buff, strlen(buff), 0, (struct sockaddr*)&broadcastAddr, broadcastLen);
 }
 
 void CommNode::update() {
@@ -106,17 +101,16 @@ void CommNode::initBroadcastListener() {
 	}
 
 	listenerLen = sizeof listenerAddr;
-
-	int ret = mkaddr(&listenerAddr, &listenerLen, const_cast<char*>(listenerStr.c_str()), const_cast<char*>("udp"));
 	
-	if (ret == -1) {
-		cnLog->exitWithErrorMessage("Error getting socket address");
-	}
+	memset(&listenerAddr, 0, listenerLen);
+	listenerAddr.sin_family = AF_INET;
+	listenerAddr.sin_addr.s_addr = INADDR_ANY;
+	listenerAddr.sin_port = htons(portNumber);
 
 	//For the socket options that take an enable/disable int value
 	int enable = 1;
 
-	ret = setsockopt(udpListenerFD, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof enable);
+	int ret = setsockopt(udpListenerFD, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof enable);
 
 	if (ret == -1) {
 		cnLog->exitWithErrorMessage("Error setting socket reuseaddr option");
@@ -129,6 +123,32 @@ void CommNode::initBroadcastListener() {
 	}
 }
 
+//local helper function for getting the broadcast IP address based on local IP and
+//subnet mask
+static in_addr_t getBroadcastIp() {
+	in_addr_t retVal;
+
+	struct ifaddrs* allAddrs = NULL;
+	getifaddrs(&allAddrs);
+
+	for (struct ifaddrs* it = allAddrs; it != NULL; it = it->ifa_next) {
+		if (!it->ifa_addr) {
+			continue;
+		}
+
+		if (it->ifa_addr->sa_family == AF_INET) {
+			retVal = ((struct sockaddr_in*)it->ifa_addr)->sin_addr.s_addr;
+		}
+	}
+
+	if (allAddrs != NULL)
+		freeifaddrs(allAddrs);
+
+	cnLog->debug(std::to_string(retVal));
+
+	return retVal;
+}
+
 void CommNode::initBroadcastServer() {
 	udpBroadcastFD = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -137,25 +157,24 @@ void CommNode::initBroadcastServer() {
 	}
 
 	broadcastLen = sizeof broadcastAddr;
-
-	int ret = mkaddr(&broadcastAddr, &broadcastLen, const_cast<char*>(broadcastStr.c_str()), const_cast<char*>("udp"));
 	
-	if (ret == -1) {
-		cnLog->exitWithErrorMessage("Error getting socket address");
-	}
+	memset(&broadcastAddr, 0, broadcastLen);
+	broadcastAddr.sin_family = AF_INET;
+	broadcastAddr.sin_addr.s_addr = getBroadcastIp();
+	broadcastAddr.sin_port = htons(portNumber);
 
 	//For the socket options that take an enable/disable int value
 	int enable = 1;
 
-	ret = setsockopt(udpBroadcastFD, SOL_SOCKET, SO_BROADCAST, &enable, sizeof enable);
+	int ret = setsockopt(udpBroadcastFD, SOL_SOCKET, SO_BROADCAST, &enable, sizeof enable);
 
 	if (ret == -1) {
 		cnLog->exitWithErrorMessage("Error setting socket reuseaddr option");
 	}
 
-	ret = bind(udpBroadcastFD, (struct sockaddr*)&broadcastAddr, broadcastLen);
+	ret = connect(udpBroadcastFD, (struct sockaddr*)&broadcastAddr, broadcastLen);
 
 	if (ret == -1) {
-		cnLog->exitWithErrorMessage("Error binding socket to broadcast address");
+		cnLog->exitWithErrorMessage("Error connecting socket to broadcast address");
 	}	
 }
