@@ -211,8 +211,6 @@ void CommNode::addNeighbor(NeighborInfo n) {
 }
 
 void CommNode::sendHeartbeat() {
-	int enable = 1;
-	setsockopt(udpBroadcastFD, SOL_SOCKET, SO_BROADCAST, &enable, sizeof enable);
 
 	char buff[512];
 	sprintf(buff, "add %s %d", boost::uuids::to_string(uuid).c_str(), tcpAddr.sin_port);
@@ -249,16 +247,7 @@ void CommNode::initBroadcastListener() {
 	listenerAddr.sin_addr.s_addr = INADDR_ANY;
 	listenerAddr.sin_port = htons(udpPortNumber);
 
-	//For the socket options that take an enable/disable int value
-	int enable = 1;
-
-	int ret = setsockopt(udpListenerFD, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof enable);
-
-	if (ret == -1) {
-		cnLog->exitWithErrorMessage("Error setting socket reuseaddr option");
-	}
-
-	ret = bind(udpListenerFD, (struct sockaddr*)&listenerAddr, listenerLen);
+	int ret = bind(udpListenerFD, (struct sockaddr*)&listenerAddr, listenerLen);
 
 	if (ret == -1) {
 		cnLog->exitWithErrorMessage("Error binding socket to listener address");
@@ -314,11 +303,12 @@ void CommNode::initBroadcastServer() {
 		cnLog->exitWithErrorMessage("Error setting socket reuseaddr option");
 	}
 
-	ret = connect(udpBroadcastFD, (struct sockaddr*)&broadcastAddr, broadcastLen);
+/*	ret = connect(udpBroadcastFD, (struct sockaddr*)&broadcastAddr, broadcastLen);
 
 	if (ret == -1) {
 		cnLog->exitWithErrorMessage("Error connecting socket to broadcast address");
-	}	
+	}
+*/	
 }
 
 void CommNode::initTCPListener() {
