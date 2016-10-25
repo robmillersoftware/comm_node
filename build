@@ -2,7 +2,7 @@
 
 build() {
 	#Copy configuration files over to bin directory
-	cp config/* bin/config
+	cp -R config bin
 	#Move to the bld directory to avoid dumping cmake files into the 
 	#source tree
 	cd cmake
