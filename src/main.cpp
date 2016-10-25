@@ -31,11 +31,9 @@
 extern CommNodeLog* cnLog;
 boost::property_tree::ptree pt;
 
-//This struct holds properties passed in from the configuration file
-struct Properties {
-	int portNumber = 8000;
-	int heartbeatIntervalSecs = 10;
-} properties;
+//Global variables
+int portNumber = 8000;
+int heartbeatIntervalSecs = 10;
 
 void loadConfigFile();
 
@@ -63,17 +61,12 @@ int main(int argc, char *argv[]) {
 	close(STDERR_FILENO);
 
 	//We're now set up as a service, create node object and begin
-	CommNode c(properties.portNumber);
+	CommNode c(portNumber);
 	c.start();
 	
-	try {
-		loadConfigFile();
-	} catch(...) {
-		//TODO: Add exception handling
-		exit(1);
-	}
-	//Set up logging
-		
+	loadConfigFile();
+	
+//Set up logging		
 	const std::string logFileName = pt.get<std::string>(
 		"NodeProperties.logFileName") + 
 		boost::uuids::to_string(c.getUUID()) + ".log";
@@ -85,13 +78,13 @@ int main(int argc, char *argv[]) {
 		"Launching process with PID: " + std::to_string(::getpid()) + "\n");
 	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
 		"Starting node with heartbeat every " + 
-		std::to_string(properties.heartbeatIntervalSecs) + 
+		std::to_string(heartbeatIntervalSecs) + 
 		" seconds...");
 
 	c.start();
 
 	while(c.isRunning()) {
-		sleep(properties.heartbeatIntervalSecs);
+		sleep(heartbeatIntervalSecs);
 		c.update();
 	}
 
@@ -108,18 +101,6 @@ void loadConfigFile() {
 		PARENT_DIRECTORY "/config/CommNodeConfig.ini", pt);
 
 	//Convert properties from std::strings to numbers
-	const std::string processName = pt.get<std::string>(
-		"NodeProperties.processName");
-	const std::string portString = pt.get<std::string>(
-		"NodeProperties.portNumber");
 	const std::string heartbeatIntervalString = pt.get<std::string>(
 		"NodeProperties.heartbeatInterval");
-
-	try {	
-		//properties.portNumber = boost::lexical_cast<int>(portString);
-		//properties.heartbeatIntervalSecs = boost::lexical_cast<int>(
-		//	heartbeatIntervalString);
-	} catch (boost::bad_lexical_cast&) {
-		//TODO: Add exception handling
-	}
 }
