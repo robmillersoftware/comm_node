@@ -5,6 +5,7 @@
 #include <map>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/nil_generator.hpp>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -33,7 +34,7 @@ class CommNode {
 			return static_cast<CommNode*>(p)->handleTCP();
 		}
 
-		CommNode(int port);
+		CommNode(boost::uuids::uuid id, int port);
 		
 		/*
 		 * These three functions are the controls for the node
@@ -59,10 +60,13 @@ class CommNode {
 		void startTCPListener();
 		void* handleBroadcast(void);
 		void* handleTCP(void);
+		void forwardToLocalNeighbors(char* msg, unsigned long int sz, 
+			boost::uuids::uuid id = boost::uuids::nil_uuid());
 		void sendHeartbeat();
 		void addNeighbor(NeighborInfo n);
 		void printNeighbors();
 		void runMetrics();
+		const char* createTCPResponse(int sockFD, char* buf, unsigned long int sz);
 
 		/**
 		 * Private variables
@@ -85,10 +89,15 @@ class CommNode {
 		unsigned int tcpLen;
 		pthread_t listenerThread;
 		pthread_t tcpThread;
-		std::map<boost::uuids::uuid, NeighborInfo> neighbors;
+		bool isListening;							//We are listening for UDP broadcasts
 		unsigned short tcpPort; 			//This is assigned when the TCP listener is 
 																	//initialized
+	
+		//This map contains all nodes that can be reached on the LAN
+		std::map<boost::uuids::uuid, NeighborInfo> neighbors;
+
+		//This map contains only nodes that exist on the same IP address as the
+		//current node
+		std::map<boost::uuids::uuid, NeighborInfo> localNeighbors;
 };
-
-
 #endif

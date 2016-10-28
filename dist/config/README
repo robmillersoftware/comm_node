@@ -1,0 +1,1 @@
+To run the commNode application, simply execute the runCN.sh script. Running the binary itself will generate an error in the appropriate logs/commnode*.log file.

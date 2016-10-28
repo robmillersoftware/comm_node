@@ -1,6 +1,4 @@
 cmake_minimum_required(VERSION 3.4.0)
 project(commNode)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_HOME_DIRECTORY}/bin)
-add_definitions(-DPARENT_DIRECTORY="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-add_definitions(-DLOG_DIRECTORY="${CMAKE_HOME_DIRECTORY}/bin/logs")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_HOME_DIRECTORY}/dist/bin)
 subdirs(src)

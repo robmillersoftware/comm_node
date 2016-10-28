@@ -2,7 +2,8 @@
 
 build() {
 	#Copy configuration files over to bin directory
-	cp -R config bin
+	cp -R config dist
+	cp scripts/runCN.sh dist
 	#Move to the bld directory to avoid dumping cmake files into the 
 	#source tree
 	cd cmake
@@ -15,7 +16,7 @@ clean() {
 	#bld directory. Remove all non-directories 
 	#from under bin
 	rm -rf cmake/*
-	find bin -type f | xargs rm
+	find dist -type f | xargs rm
 }
 
 #If we're running with no arguments, then just do a normal build

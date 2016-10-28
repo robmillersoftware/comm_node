@@ -95,17 +95,12 @@ class CommNodeLog {
 			boost::filesystem::rename(logPath, logArchive);
 		}
 
-		/*
-		 *	This function is a wrapper that sends an error message to the log then exits
-		 * 	the application. 
-		 *  @param msg 256 character max string
+		/**
+		 * Logs and error then exits the application
 		 */
-		void exitWithErrorMessage(std::string msg) {
-			//For storing error messages to send to the log
-			char errMsg[256];
-			sprintf(errMsg, "%s: %s", msg.c_str(), std::strerror(errno));
-			writeMessage(severities::CN_ERROR, errMsg);
-			exit(1);	
+		void exitWithError(std::string msg) {
+			error(msg);
+			exit(1);
 		}
 
 		/**
@@ -113,7 +108,8 @@ class CommNodeLog {
 		 * parameter
 		 */
 		void error(std::string msg) {
-			writeMessage(severities::CN_ERROR, msg);
+			writeMessage(severities::CN_ERROR, msg + ": " + 
+				std::string(strerror(errno)));
 		}
 
 		void warning(std::string msg) {
@@ -143,6 +139,8 @@ class CommNodeLog {
 					return "warning";
 				case severities::CN_ERROR:
 					return "error";
+				default:
+					return "";
 			};
 		}
 };

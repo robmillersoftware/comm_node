@@ -21,6 +21,7 @@
 //development. I acknowledge that there are faster and more lightweight
 //alternatives for some of the things I'm doing. 
 #include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/uuid_generators.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ini_parser.hpp>
 #include <boost/lexical_cast.hpp>
@@ -38,6 +39,14 @@ int heartbeatIntervalSecs = 10;
 void loadConfigFile();
 
 int main(int argc, char *argv[]) {
+	//If the INSTALL_DIRECTORY environment variable isn't present, then the 
+	//node wasn't launched with the run script.
+	const char* installDir = getenv("INSTALL_DIRECTORY");
+	if (installDir == NULL) {
+		std::cout << "Use run.sh to launch commNode" << endl;
+		exit(1);
+	}
+
 	pid_t pid, sid;
 
 	//Here's how we make our daemon
@@ -60,18 +69,17 @@ int main(int argc, char *argv[]) {
 	close(STDOUT_FILENO);
 	close(STDERR_FILENO);
 
-	//We're now set up as a service, create node object and begin
-	CommNode c(portNumber);
-	c.start();
 	
 	loadConfigFile();
 	
-//Set up logging		
+	//Generate the node's UUID first so we can append it to the log file name
+	boost::uuids::uuid nodeId = boost::uuids::random_generator()();
+
 	const std::string logFileName = pt.get<std::string>(
 		"NodeProperties.logFileName") + 
-		boost::uuids::to_string(c.getUUID()) + ".log";
+		boost::uuids::to_string(nodeId) + ".log";
 	std::stringstream ssPath;
-	ssPath << LOG_DIRECTORY << "/" << logFileName;
+	ssPath << std::string(installDir) << "/logs/" << logFileName;
 	cnLog->init(ssPath.str());
 
 	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
@@ -81,6 +89,8 @@ int main(int argc, char *argv[]) {
 		std::to_string(heartbeatIntervalSecs) + 
 		" seconds...");
 
+	//We're now set up as a service, create node object and begin
+	CommNode c(nodeId, portNumber);
 	c.start();
 
 	while(c.isRunning()) {
@@ -93,12 +103,12 @@ int main(int argc, char *argv[]) {
 
 /**
  * This function reads and parses an ini file to get configuration options. 
- * LOG_DIRECTORY and PARENT_DIRECTORY are preprocessor macros defined by cmake
  */
 void loadConfigFile() {
 	//Load the .ini file into a boost Property Tree.
 	boost::property_tree::ini_parser::read_ini(
-		PARENT_DIRECTORY "/config/CommNodeConfig.ini", pt);
+		std::string(getenv("INSTALL_DIRECTORY")) +  "/config/CommNodeConfig.ini", 
+		pt);
 
 	//Convert properties from std::strings to numbers
 	const std::string heartbeatIntervalString = pt.get<std::string>(
