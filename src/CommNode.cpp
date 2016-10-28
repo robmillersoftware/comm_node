@@ -18,7 +18,12 @@ static in_addr_t getBroadcastIp() {
 	getifaddrs(&allAddrs);
 
 	for (ifaddrs* it = allAddrs; it != NULL; it = it->ifa_next) {
-		if (it->ifa_ifu.ifu_broadaddr == NULL) continue;
+		//If the ifaddr isn't IPv4, if it doesn't have a broadcast IP, or if 
+		//it is the loopback interface then continue
+		if (it->ifa_addr->sa_family != AF_INET ||
+				it->ifa_ifu.ifu_broadaddr == NULL ||
+				strcmp(it->ifa_name, "lo") == 0)
+			continue;
 
 	  char rtn[INET_ADDRSTRLEN];
 		memset(rtn, 0, INET_ADDRSTRLEN);
@@ -70,6 +75,7 @@ void CommNode::initBroadcastListener() {
 		if (errno == EADDRINUSE) {
 			//Ignore this error. It most likely means that another CN is already 
 			//listening for broadcasts. It will forward messages to this node. 
+			cnLog->debug("Unable to bind to local port, waiting for master");
 			isListening = false;
 		} else {
 			cnLog->exitWithError("Error binding to local port " + 
@@ -107,7 +113,6 @@ void CommNode::initBroadcastServer() {
 
 	char ipstr[INET_ADDRSTRLEN];
 	inet_ntop(AF_INET, &(broadcastAddr.sin_addr), ipstr, INET_ADDRSTRLEN);
-	cnLog->debug("SENDING BROADCAST TO " + std::string(ipstr));
 	if (broadcastAddr.sin_addr.s_addr == 0) {
 		cnLog->exitWithError("Unable to find broadcast IP address");
 	}
@@ -215,10 +220,10 @@ void* CommNode::handleTCP() {
  	fds.push_back(tcp);
 
 	while(running) {
-		if (poll(&fds[0], fds.size(), -1))
-			cnLog->exitWithError("Error selecting on fds");
+		if (poll(&fds[0], fds.size(), -1) <= 0)
+			cnLog->exitWithError("Error polling");
 
-		for (unsigned int i = 0; i < fds.size(); ++i) {
+		for (unsigned int i = 1; i < fds.size(); ++i) {
 			if (fds[i].revents == 0) continue;
 			if (fds[i].revents != POLLIN) 
 				cnLog->exitWithError("Received unexpected poll event");
@@ -243,7 +248,7 @@ void* CommNode::handleTCP() {
 				char reply[boost::uuids::uuid::static_size()];
 				ret = read(newSock, &reply, boost::uuids::uuid::static_size());
 				if (ret < 0) {
-					cnLog->debug("Error reading from socket number " + 
+					cnLog->debug("Error reading from accepted TCP socket number " +
 						std::to_string(newSock));
 				}
 					
@@ -348,7 +353,7 @@ void* CommNode::handleBroadcast() {
 
 		cnLog->debug("GETTING SOMETHING: " + std::string(udpDgram));
 		//Before doing any processing, forward the message
-		forwardToLocalNeighbors(udpDgram, sizeof udpDgram);
+		//forwardToLocalNeighbors(udpDgram, sizeof udpDgram);
 
 		//The format for broadcast dgrams is "command args1 arg2 .. argn"
 		std::string broadcastMsg(udpDgram);
@@ -394,8 +399,6 @@ void CommNode::forwardToLocalNeighbors(char* msg, unsigned long int sz,
 		write(localNeighbors[id].socketFD, msg, sz);
 	} else {
 		for (auto it : localNeighbors) {
-			cnLog->debug("Forwarding received message: " + std::string(msg) +
-				" to local neighbor: " + boost::uuids::to_string(it.second.uuid));
 			int ret = write(it.second.socketFD, msg, sz);
 			if (ret < 0) {
 				cnLog->exitWithError("Unable to write to socket: " + 
@@ -454,10 +457,9 @@ void CommNode::addNeighbor(NeighborInfo n) {
 		if (res < 0) {
 			cnLog->error("Error connecting to TCP socket: ");
 		}
-	
-		cnLog->debug("Connected to neighbor at address: " + n.ip + 
-			std::to_string(n.port));
 
+		cnLog->debug("CONNECTED TO PEER: " + n.ip + ":" + std::to_string(n.port));
+	
 		// See if this neighbor is running on our local machine, if so add them 
 		// to the localNeighbors map
 		if (fromLocalMachine(n.ip) && localNeighbors.count(n.uuid) == 0) {
