@@ -25,15 +25,8 @@ static in_addr_t getBroadcastIp() {
 				strcmp(it->ifa_name, "lo") == 0)
 			continue;
 
-	  char rtn[INET_ADDRSTRLEN];
-		memset(rtn, 0, INET_ADDRSTRLEN);
- 		const void* rtnPtr = inet_ntop(AF_INET, 
-			&(((sockaddr_in*)it->ifa_addr)->sin_addr), rtn, INET_ADDRSTRLEN);
-
-		if (rtnPtr == NULL)
-			cnLog->exitWithError("Unable retrieve IP string from ifaddrs");
-		
-		return ((sockaddr_in*)it->ifa_addr)->sin_addr.s_addr;
+		sockaddr_in* brd = (sockaddr_in*)(it->ifa_ifu.ifu_broadaddr);
+		return brd->sin_addr.s_addr;
 	}
 	if (allAddrs != NULL)
 		freeifaddrs(allAddrs);
@@ -113,6 +106,9 @@ void CommNode::initBroadcastServer() {
 
 	char ipstr[INET_ADDRSTRLEN];
 	inet_ntop(AF_INET, &(broadcastAddr.sin_addr), ipstr, INET_ADDRSTRLEN);
+
+	cnLog->debug("BROADCASTING ON " + std::string(ipstr) + ":" +
+		std::to_string(udpPortNumber));	
 	if (broadcastAddr.sin_addr.s_addr == 0) {
 		cnLog->exitWithError("Unable to find broadcast IP address");
 	}
