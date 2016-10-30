@@ -410,16 +410,11 @@ void CommNode::connectToNeighbor(std::string id, std::string ip, int port) {
 		cnLog->exitWithError("Error making TCP socket non-blocking");
 	}
 
-	do {
-		res = connect(socketFD, resInfo->ai_addr, resInfo->ai_addrlen);
-		if (res < 0) {
-			if (errno == EINPROGRESS)
-				continue;
+	res = connect(socketFD, resInfo->ai_addr, resInfo->ai_addrlen);
+	if (res < 0) {
+		if (errno != EINPROGRESS)
 			cnLog->error("Error connecting to TCP socket: ");
-		} else {
-			break;
-		}
-	} while(true);
+	}
 
 	pollfd poll = { socketFD, POLLIN | POLLPRI, 0 };
 	fds.push_back(poll);
