@@ -1,42 +1,25 @@
 #include "CommNode.h"
 #include <boost/uuid/uuid_io.hpp>
-#include <boost/timer/timer.hpp>
 #include "CommNodeLog.h"
-#include <ifaddrs.h>
-#include <boost/algorithm/string.hpp>
-#include <sys/poll.h>
+#include <chrono>
+#include <ctime>
 
 //This external variable holds the instance to the logger used by all files
 extern CommNodeLog* cnLog;
 
-/** 
- * Local helper function for getting the broadcast IP address based on local 
- * IP and subnet mask
- */
-static in_addr_t getBroadcastIp() {
-	ifaddrs* allAddrs = NULL;
-	getifaddrs(&allAddrs);
+//Helper functions. Implementation at bottom of file
+static in_addr_t getBroadcastIp();
+static bool fromLocalMachine(std::string ip);
 
-	for (ifaddrs* it = allAddrs; it != NULL; it = it->ifa_next) {
-		//If the ifaddr isn't IPv4, if it doesn't have a broadcast IP, or if 
-		//it is the loopback interface then continue
-		if (it->ifa_addr->sa_family != AF_INET ||
-				it->ifa_ifu.ifu_broadaddr == NULL ||
-				strcmp(it->ifa_name, "lo") == 0)
-			continue;
-
-		sockaddr_in* brd = (sockaddr_in*)(it->ifa_ifu.ifu_broadaddr);
-		return brd->sin_addr.s_addr;
-	}
-	if (allAddrs != NULL)
-		freeifaddrs(allAddrs);
-	return 0;
-}
+const char* CommNode::NO_RESPONSE = "done";
 
 /*
- * This is the only constructor used by this application
+ * Set member variables and initialize the three main sockets we'll be using
  */
 CommNode::CommNode(boost::uuids::uuid id, int port) {
+	neighbors = new map<std::string, NeighborInfo>();
+	localNeighbors = new map<std::string, NeighborInfo>();
+
 	udpPortNumber = port;
 	uuid = id; 
 	
@@ -45,25 +28,78 @@ CommNode::CommNode(boost::uuids::uuid id, int port) {
 	initTCPListener();
 }
 
+/*
+ * Sets the state to running and starts the listener threads.
+ */
+void CommNode::start() {
+	running = true;
+
+	//We only want to start the udp listener if we sucessfully bound
+	//the listener socket
+	if (isListening) {
+		startBroadcastListener();
+	}
+
+	startTCPListener();
+}
+
+/*
+ * Turns off the running state which causes the application to close
+ */
+void CommNode::stop() {
+	running = false;
+}
+
+/**
+ * Sends a heartbeat and runs various upkeep code
+ */
+void CommNode::update() {
+	sendHeartbeat();
+	runMetrics();
+	printNeighbors();
+	cnLog->debug("Still alive..." + std::to_string(neighbors->size()));
+}
+
+/**
+ * Sends a UDP packet to the broadcast address
+ */
+void CommNode::sendHeartbeat() {
+	char buff[DGRAM_SIZE];
+	memset(buff, 0, DGRAM_SIZE);
+	sprintf(buff, "add %s %d", boost::uuids::to_string(uuid).c_str(), 
+		tcpPortNumber);
+	
+	int ret = sendto(udpBroadcastFD, buff, DGRAM_SIZE, 0, 
+		(sockaddr*)&broadcastAddr, broadcastLen);
+	if (ret < 0) {
+		cnLog->exitWithError("Error sending to broadcast socket");
+	}
+}
 /**
  * Sets up a socket that handles incoming UDP messages on the specified port.
  * These messages will be coming from the LAN broadcast IP
  */
 void CommNode::initBroadcastListener() {
-	udpListenerFD = socket(AF_INET, SOCK_DGRAM, 0);
+	addrinfo hints, *resInfo;
 
-	if (udpListenerFD < 0) {
-		cnLog->exitWithError("Unable to create UDP socket file descriptor");
-	}
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_flags = AI_PASSIVE;
+	hints.ai_protocol = IPPROTO_UDP;
 
-	listenerLen = sizeof listenerAddr;
+	char port[5];
+	sprintf(port, "%d", udpPortNumber);
 	
-	memset(&listenerAddr, 0, listenerLen);
-	listenerAddr.sin_family = AF_INET;
-	listenerAddr.sin_addr.s_addr = INADDR_ANY;
-	listenerAddr.sin_port = htons(udpPortNumber);
+	int res = getaddrinfo(NULL, port, &hints, &resInfo);
+	if (res != 0)
+		cnLog->exitWithError("Error getting UDP addr info: " +
+			std::string(gai_strerror(res)));
 
-	int ret = bind(udpListenerFD, (sockaddr*)&listenerAddr, listenerLen);
+	udpListenerFD = socket(hints.ai_family, hints.ai_socktype, hints.ai_protocol);
+	if (udpListenerFD < 0)
+		cnLog->exitWithError("Unable to create UDP socket file descriptor");
+
+	int ret = bind(udpListenerFD, resInfo->ai_addr, resInfo->ai_addrlen);
 	if (ret < 0) {
 		if (errno == EADDRINUSE) {
 			//Ignore this error. It most likely means that another CN is already 
@@ -75,10 +111,10 @@ void CommNode::initBroadcastListener() {
 				std::to_string(udpPortNumber));
 		}	
 	} else {
-		cnLog->debug("Listening for UDP messages on port " + 
-			std::to_string(udpPortNumber));
+		//Bind was successful, set flag to show we are listening
 		isListening = true;
 	}
+	freeaddrinfo(resInfo);
 }
 
 /**
@@ -87,33 +123,41 @@ void CommNode::initBroadcastListener() {
  * port number.
  */
 void CommNode::initBroadcastServer() {
-	udpBroadcastFD = socket(AF_INET, SOCK_DGRAM, 0);
-	if (udpBroadcastFD < 0) {
+	addrinfo hints, *resInfo;
+
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	
+	char ipStr[INET_ADDRSTRLEN];
+	in_addr_t brd = getBroadcastIp();
+	inet_ntop(hints.ai_family, &brd, ipStr, INET_ADDRSTRLEN);
+	
+	int res = getaddrinfo(ipStr, std::to_string(udpPortNumber).c_str(), 
+		&hints, &resInfo);
+	if (res != 0)
+		cnLog->exitWithError("Error getting UDP addr info: " +
+			std::string(gai_strerror(res)));
+	
+	udpBroadcastFD = socket(resInfo->ai_family, resInfo->ai_socktype, 
+		resInfo->ai_protocol);
+	if (udpBroadcastFD < 0)
 		cnLog->exitWithError("Unable to create UDP socket file descriptor");
-	}
 
 	int enable = 1;
 	int ret = setsockopt(udpBroadcastFD, SOL_SOCKET, SO_BROADCAST, 
 		&enable, sizeof enable);
-	if (ret < 0) {
+	if (ret < 0)
 		cnLog->exitWithError("Error setting options for broadcast socket");
-	}
 
+	//Saving this sockaddr for later so we don't have to look it up again
 	broadcastLen = sizeof broadcastAddr;
 	memset(&broadcastAddr, 0, broadcastLen);
-	broadcastAddr.sin_family = AF_INET;
-	broadcastAddr.sin_addr.s_addr = getBroadcastIp();
-
-	char ipstr[INET_ADDRSTRLEN];
-	inet_ntop(AF_INET, &(broadcastAddr.sin_addr), ipstr, INET_ADDRSTRLEN);
-
-	cnLog->debug("BROADCASTING ON " + std::string(ipstr) + ":" +
-		std::to_string(udpPortNumber));	
-	if (broadcastAddr.sin_addr.s_addr == 0) {
-		cnLog->exitWithError("Unable to find broadcast IP address");
-	}
-
-	broadcastAddr.sin_port = htons(udpPortNumber);
+	broadcastAddr.sin_family = resInfo->ai_family;
+	broadcastAddr.sin_addr = ((sockaddr_in*)resInfo->ai_addr)->
+		sin_addr;
+	broadcastAddr.sin_port = ((sockaddr_in*)resInfo->ai_addr)->sin_port;
+	freeaddrinfo(resInfo);
 }
 
 /**
@@ -121,80 +165,74 @@ void CommNode::initBroadcastServer() {
  * listen for connect() attempts and accept them
  */
 void CommNode::initTCPListener() {
-	tcpListenerFD = socket(AF_INET, SOCK_STREAM, 0);
+	addrinfo hints, *resInfo;
+
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+	hints.ai_protocol = IPPROTO_TCP;
+	
+	int ret = getaddrinfo(NULL, "0", &hints, &resInfo);
+	if (ret != 0)
+		cnLog->exitWithError("Error getting TCP addr info: " +
+			std::string(gai_strerror(ret)));
+
+	tcpListenerFD = socket(resInfo->ai_family, resInfo->ai_socktype, 
+		resInfo->ai_protocol);
 	if (tcpListenerFD < 0) {
 		cnLog->exitWithError("Unable to create TCP socket file descriptor");
 	}
 
-	tcpLen = sizeof tcpAddr;
-	memset(&tcpAddr, 0, tcpLen);
-	tcpAddr.sin_family = AF_INET;
-	tcpAddr.sin_addr.s_addr = INADDR_ANY;
-	tcpAddr.sin_port = 0;
-
 	int enable = 1;
-	int ret = setsockopt(tcpListenerFD, SOL_SOCKET, SO_REUSEADDR, 
+	ret = setsockopt(tcpListenerFD, SOL_SOCKET, SO_REUSEADDR, 
 		&enable, sizeof enable);
 	if (ret < 0) {
 		cnLog->exitWithError(
 			"Error setting socket options for TCP listener");
 	}
 
-	ret = bind(tcpListenerFD, (sockaddr*)&tcpAddr, tcpLen);
+	ret = ioctl(tcpListenerFD, FIONBIO, (char*)&enable);
+	if (ret < 0) {
+		cnLog->exitWithError("Error making TCP socket non-blocking");
+	}
+	
+	ret = bind(tcpListenerFD, resInfo->ai_addr, resInfo->ai_addrlen);
 	if (ret < 0) {
 		cnLog->exitWithError("Error binding socket to listener address");
 	}
 
-	ret = getsockname(tcpListenerFD, (sockaddr*)&tcpAddr, &tcpLen);
-	if (ret < 0) {
-		cnLog->exitWithError("Error getting socket address");
+	sockaddr_in temp;
+  unsigned int l = sizeof temp;
+	if (getsockname(tcpListenerFD, (sockaddr*)&temp, &l) == -1) {
+		cnLog->exitWithError("Error getting socket details");
 	}
 
+	((sockaddr_in*)resInfo->ai_addr)->sin_port = temp.sin_port;
+
 	ret = listen(tcpListenerFD, 10);
+
 	if (ret < 0) {
 		cnLog->exitWithError("Unable to listen on TCP socket " +
 			std::to_string(tcpListenerFD));
 	}
 
-	cnLog->debug("Listening for TCP connections on port number: " + 
-		std::to_string(ntohs(tcpAddr.sin_port)));
-}
-
-/*
- * Sets the state to running and starts the listener threads.
- */
-void CommNode::start() {
-	running = true;
-
-	//We only want to start the broadcast listening if we sucessfully bound
-	//the listener socket
-	if (isListening) {
-		startBroadcastListener();
-	}
-
-	startTCPListener();
+	tcpPortNumber = ntohs(((sockaddr_in*)resInfo->ai_addr)->sin_port);
+	freeaddrinfo(resInfo);
 }
 
 /**
- * This function creates a new POSIX thread where the UDP server will be 
- * listening for heartbeat messages from other nodes.
+ * This function creates a new POSIX thread where this CN will be listening
+ * for heartbeat messages from other nodes.
  */
 void CommNode::startBroadcastListener() {
-	int ret = pthread_create(&listenerThread, NULL, &CommNode::handleBroadcast, this);	
+	int ret = pthread_create(&listenerThread, NULL, &CommNode::handleBroadcast, 
+		this);	
 	if (ret) 
 		cnLog->exitWithError("Error creating broadcast thread");
 }
 
-/*
- * Turns off the running state which causes the application to close
- */
-void CommNode::stop() {
-	running = false;
-}
-
 /**
- * This launches the TCP listener on another thread. Neighbor nodes will connect
- * to this socket
+ * This function creates a POSIX thread where the TCP 
  */
 void CommNode::startTCPListener() {
 	int ret = pthread_create(&tcpThread, NULL, &CommNode::handleTCP, this);	
@@ -202,154 +240,27 @@ void CommNode::startTCPListener() {
 		cnLog->exitWithError("Error creating TCP thread");
 }
 
-
-/**
- * This function is called when the TCP listener is started. It handles reading
- * from all TCP sockets
- */
-void* CommNode::handleTCP() {
-	sockaddr_in neighborAddr;
-	unsigned int neighborLen = sizeof neighborAddr;
-	vector<pollfd> fds;
-	
-	pollfd tcp = { tcpListenerFD, POLLIN, 0 };
- 	fds.push_back(tcp);
-
-	while(running) {
-		if (poll(&fds[0], fds.size(), -1) <= 0)
-			cnLog->exitWithError("Error polling");
-
-		for (unsigned int i = 1; i < fds.size(); ++i) {
-			if (fds[i].revents == 0) continue;
-			if (fds[i].revents != POLLIN) 
-				cnLog->exitWithError("Received unexpected poll event");
-
-			cnLog->debug("Got a TCP message on socket: " + std::to_string(i));
-			if (i == (unsigned int)tcpListenerFD) {
-				int newSock = accept(tcpListenerFD, (sockaddr*)&neighborAddr, 
-					&neighborLen);
-				if (newSock < 0) {
-						cnLog->error("Unable to accept TCP connection");
-				}
-				
-				//Write to remote node with the get command specifying uuid
-				std::string msg("get uuid");
-				int ret = write(newSock, msg.c_str(), sizeof msg.c_str());
-				if (ret < 0) {
-					cnLog->debug("Error writing to socket number " + 
-						std::to_string(newSock));
-				}
-					
-				//The neighbor responds with their UUID
-				char reply[boost::uuids::uuid::static_size()];
-				ret = read(newSock, &reply, boost::uuids::uuid::static_size());
-				if (ret < 0) {
-					cnLog->debug("Error reading from accepted TCP socket number " +
-						std::to_string(newSock));
-				}
-					
-				std::string replyStr(reply);
-				boost::algorithm::trim(replyStr);
-					
-				boost::uuids::uuid neighborId = 
-					boost::lexical_cast<boost::uuids::uuid>(replyStr);
-
-				if (neighbors.count(neighborId) != 0) {
-					neighbors[neighborId].socketFD = newSock;
-					cnLog->debug("TCP Socket connected to neighbor:" + replyStr);
-				}
-			} else {
-				char buffer[256];
-				int nbytes = recv(i, &buffer, sizeof buffer, 0);
-
-				//Bytes received less than or equal to 0. Either the client hung up
-				//or there was an error
-				if (nbytes <= 0) {
-					if (nbytes == 0) {
-						cnLog->debug("Socket hung up: " + std::to_string(i));
-					} else {
-						cnLog->error("Error reading from socket " + std::to_string(i));
-					}
-					close(i);
-				} else {
-					const char* resp = createTCPResponse(i, buffer, sizeof buffer);
-					write(i, resp, strlen(resp));
-				}
-			}
-		}
-	}
-
-	return NULL;
-}
-
-/**
- * Helper function that handles parsing a TCP recv string
- */
-const char* CommNode::createTCPResponse(int sockFD, char* buf, 
-		long unsigned int sz) {
-	std::string str(buf, sz);
-	std::vector<std::string> splits;
-
-	boost::split(splits, str, boost::is_any_of("\t "));
-
-	if (splits[0] == "ping") {
-		cnLog->debug("Ping request received");
-		return "pong";
-	} else if (splits[0] == "get") {
-		if (splits[1] == "uuid") {
-			cnLog->debug("Received request for UUID");
-			return boost::uuids::to_string(uuid).c_str();
-		}
-	} else if (splits[0] == "add") {
-		sockaddr_in peer;
-		unsigned int peerLen = sizeof peer;
-		getpeername(sockFD, (sockaddr*)&peer, &peerLen);
-
-		std::string neighbor = splits[1];
-		boost::algorithm::trim(neighbor);
-
-		std::string myself = boost::uuids::to_string(uuid);
-
-		//The received packet should have the UUID of the originating node. 
-		//Make sure it isn't coming from this one
-		if (myself.compare(neighbor)) {
-			char ip[INET_ADDRSTRLEN];
-
-			inet_ntop(AF_INET, &(peer.sin_addr), ip, INET_ADDRSTRLEN);
-
-			NeighborInfo n;
-			n.uuid = boost::lexical_cast<boost::uuids::uuid>(neighbor);
-			n.ip = std::string(ip);
-			n.port = atoi(splits[2].c_str());
-							
-			addNeighbor(n);
-		}
-		return "added";
-	}
-	cnLog->debug("Invalid TCP request: " + str);
-	return NULL;
-}
-
 /**
  * This function is called by pthread_create when the UDP listener is started
  * It starts a loop that receives UDP data
  */
 void* CommNode::handleBroadcast() {
+	cnLog->debug("Listening for UDP messages on port " + 
+		std::to_string(udpPortNumber));
+	
 	while (running) {
 		//Reset the message object
-		memset(udpDgram, 0, sizeof udpDgram);
-		
-		//TODO: The dgrams being sent are a fixed size. To be safe, however, we 
-		//could use ioctl to check for leftover data after calling recv just to 
-		//make sure our messages maintain the proper format
-		int ret = recvfrom(udpListenerFD, udpDgram, sizeof udpDgram, 0, 
-			(sockaddr*)&broadcastAddr, &broadcastLen);
+		memset(udpDgram, 0, DGRAM_SIZE);
+		sockaddr_in origin;
+		unsigned int originSize = sizeof origin;
+
+		int ret = recvfrom(udpListenerFD, udpDgram, DGRAM_SIZE, 0, 
+			(sockaddr*)&origin, &originSize);
 		if (ret < 0)
 			cnLog->exitWithError("Error receiving UDP packet");
 
-		cnLog->debug("GETTING SOMETHING: " + std::string(udpDgram));
 		//Before doing any processing, forward the message
-		//forwardToLocalNeighbors(udpDgram, sizeof udpDgram);
+		forwardToLocalNeighbors(udpDgram, DGRAM_SIZE);
 
 		//The format for broadcast dgrams is "command args1 arg2 .. argn"
 		std::string broadcastMsg(udpDgram);
@@ -365,19 +276,22 @@ void* CommNode::handleBroadcast() {
 
 				std::string myself = boost::uuids::to_string(uuid);
 
+				cnLog->debug(std::to_string(neighbors->size()));
+				for (auto it : *neighbors) {
+					cnLog->debug(it.second.uuid + " " + it.second.ip + ":" + std::to_string(it.second.port));
+				}
 				//The received packet should have the UUID of the originating node. 
 				//Make sure it isn't coming from this one
-				if (myself.compare(neighbor)) {
+				if (myself.compare(neighbor) && neighbors->count(neighbor) == 0) {
 					char ip[INET_ADDRSTRLEN];
 
-					inet_ntop(AF_INET, &(broadcastAddr.sin_addr), ip, INET_ADDRSTRLEN);
+					inet_ntop(AF_INET, &(origin.sin_addr), ip, INET_ADDRSTRLEN);
+					
+					int portNum;
+					std::stringstream convert(splitStrs[2]);
+					convert >> portNum;
 
-					NeighborInfo n;
-					n.uuid = boost::lexical_cast<boost::uuids::uuid>(neighbor);
-					n.ip = std::string(ip);
-					n.port = atoi(splitStrs[2].c_str());
-							
-					addNeighbor(n);
+					connectToNeighbor(neighbor, std::string(ip), portNum);
 				}
   		}
 		}
@@ -386,15 +300,243 @@ void* CommNode::handleBroadcast() {
 }
 
 /**
+ * Polls all of this node's TCP sockets and handles incoming messages
+ */
+void* CommNode::handleTCP() {
+	pollfd newPoll = { tcpListenerFD, POLLIN | POLLPRI, 0 };
+	fds.push_back(newPoll);
+	
+	cnLog->debug("Listening for TCP connections with socket " + 
+		std::to_string(tcpListenerFD) + " on port number: " + 
+		std::to_string(tcpPortNumber));
+
+	while(running) {
+		int ret = poll(&fds[0], fds.size(), 1000);
+		cnLog->debug("POLL RETURNED");
+		if (ret < 0) {
+			cnLog->exitWithError("Error while polling");
+		} else if (ret == 0) {
+			//poll timed out, try again
+			continue;
+		} else {
+			for (unsigned int i = 0; i < fds.size(); ++i) {
+				if (fds[i].revents == 0) continue;
+				if (fds[i].revents != POLLIN && fds[i].revents != POLLPRI) 
+					cnLog->exitWithError("Received unexpected poll event");
+
+				if (fds[i].fd == (unsigned int)tcpListenerFD) {
+					cnLog->debug("GOT REQUEST FOR NEW TCP CONNECTION");
+					sockaddr_in newNeighbor;
+					unsigned int newNeighborLen = sizeof newNeighbor;
+					int newSock = accept(tcpListenerFD, (sockaddr*)&newNeighbor, 
+					 &newNeighborLen);
+					if (newSock < 0) {
+						if (errno == EAGAIN || errno == EWOULDBLOCK) {
+							continue;
+						}
+						cnLog->exitWithError("Unable to accept TCP connection");
+					}
+				
+					pollfd newFD = { newSock, POLLIN | POLLPRI, 0 };
+					fds.push_back(newFD);
+					
+					//Write to remote node with the get command specifying uuid
+					std::string msg("get uuid");
+					cnLog->debug("WRITING GET UUID REQUEST");
+					ret = write(newSock, msg.c_str(), DGRAM_SIZE);
+					if (ret < 0) {
+						cnLog->debug("Error writing to socket number " + 
+							std::to_string(newSock));
+					}
+					cnLog->debug("WROTE " + std::to_string(ret) + " BYTES");
+  			} else {
+					char buffer[DGRAM_SIZE];
+					int nbytes = read(fds[i].fd, &buffer, DGRAM_SIZE);
+					cnLog->debug("READ SOMETHING: " + std::string(buffer));
+					//Bytes received less than or equal to 0. Either the client hung up
+					//or there was an error
+					if (nbytes <= 0) {
+						if (nbytes == 0) {
+							cnLog->debug("Socket hung up: " + std::to_string(fds[i].fd));
+						} else {
+							cnLog->error("Error reading from socket " + 
+								std::to_string(fds[i].fd));
+						}
+						close(fds[i].fd);
+					} else {
+						std::string resp = createTCPResponse(fds[i].fd, buffer, DGRAM_SIZE);
+						if (resp.compare(std::string(NO_RESPONSE))) {
+							int ret = write(fds[i].fd, resp.c_str(), DGRAM_SIZE);
+							if (ret < 0)
+								cnLog->exitWithError("Error writing TCP response");
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return NULL;
+}
+
+/**
+ * Adds other nodes to the neighbors map. Adds nodes running on the 
+ * local machine to the local neighbors map. Also sets up TCP sockets to
+ * each neighbor
+ */
+void CommNode::connectToNeighbor(std::string id, std::string ip, int port) {
+	addrinfo hints, *resInfo;
+
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	hints.ai_flags = 0;
+	
+	int res = getaddrinfo(ip.c_str(), std::to_string(port).c_str(), 
+		&hints, &resInfo);
+	if (res != 0)
+		cnLog->exitWithError("Error getting TCP addr info: " +
+			std::string(gai_strerror(res)));
+	
+	int socketFD = socket(resInfo->ai_family, resInfo->ai_socktype, 
+		resInfo->ai_protocol);
+	if (socketFD < 0) {
+		cnLog->error("Unable to open socket");
+	}
+	
+	int enable = 1;
+	res = ioctl(socketFD, FIONBIO, (char*)&enable);
+	if (res < 0) {
+		cnLog->exitWithError("Error making TCP socket non-blocking");
+	}
+
+	do {
+		res = connect(socketFD, resInfo->ai_addr, resInfo->ai_addrlen);
+		if (res < 0) {
+			if (errno == EINPROGRESS)
+				continue;
+			cnLog->error("Error connecting to TCP socket: ");
+		} else {
+			break;
+		}
+	} while(true);
+
+	pollfd poll = { socketFD, POLLIN | POLLPRI, 0 };
+	fds.push_back(poll);
+}
+
+/**
+ * Helper function that handles parsing a TCP recv string
+ */
+std::string CommNode::createTCPResponse(int sockFD, char* buf, 
+		long unsigned int sz) {
+	std::string str(buf);
+	std::vector<std::string> splits;
+
+	boost::split(splits, str, boost::is_any_of("\t "));
+
+	if (splits[0] == "ping") {
+		return "pong " + splits[1];
+	} else if (splits[0] == "pong") {
+		auto stop = std::chrono::system_clock::now();
+		typedef std::chrono::system_clock::period period_t;
+		auto dur = stop.time_since_epoch();
+
+		//Get time difference in milliseconds and store it in that neighbor's 
+		//latency info
+		long long int start = atoi(splits[1].c_str());
+
+		for (auto& it : *neighbors) {
+			if (it.second.socketFD == sockFD) {
+				it.second.latency = dur.count() - start;
+	
+				float scalar;
+				if (it.second.latency == 0) {
+					scalar = 0.0f;
+				} else {
+					scalar = 1.0f / (float)(it.second.latency);
+				}
+				float bandwidth = (float)DGRAM_SIZE * scalar;
+				it.second.bandwidth = bandwidth;
+				cnLog->debug("SUCCESS " + std::to_string(it.second.latency) + " " +
+					std::to_string(bandwidth));
+				return NO_RESPONSE;
+			}
+		}
+		cnLog->debug("Unable to find neighbor with socketFD = " + 
+			std::to_string(sockFD));
+		return NO_RESPONSE;
+	} else if (splits[0] == "get") {
+		cnLog->debug("GOT GET UUID REQUEST: " + str);
+		if (splits[1] == "uuid") {
+			return "uuid " + boost::uuids::to_string(uuid);
+		}
+	} else if (splits[0] == "uuid") {
+		cnLog->debug("GOT UUID REQUEST: " + str);
+		NeighborInfo n;
+		n.socketFD = sockFD;
+		n.uuid = splits[1];
+
+		sockaddr_in peer;
+		unsigned int peerLen = sizeof peer;
+		getpeername(sockFD, (sockaddr*)&peer, &peerLen);
+		
+		char ipStr[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &(peer.sin_addr.s_addr), ipStr, INET_ADDRSTRLEN);
+
+		n.ip = std::string(ipStr);
+		n.port = ntohs(peer.sin_port);
+		neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+			
+		// See if this neighbor is running on our local machine, if 
+		// so add them to the localNeighbors map
+		if (fromLocalMachine(n.ip) && localNeighbors->count(n.uuid) == 0) {
+			localNeighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+		}
+
+		cnLog->debug("Added neighbor " + n.uuid + " at address " + n.ip + 
+			":" + std::to_string(n.port));
+	
+		return NO_RESPONSE;
+	} else if (splits[0] == "add") {
+		cnLog->debug("Received request from master to add neighbor: " + 
+			splits[1]);
+
+		sockaddr_in peer;
+		unsigned int peerLen = sizeof peer;
+		getpeername(sockFD, (sockaddr*)&peer, &peerLen);
+
+		std::string neighbor = splits[1];
+		boost::algorithm::trim(neighbor);
+
+		std::string myself = boost::uuids::to_string(uuid);
+
+		//The received packet should have the UUID of the originating node. 
+		//Make sure it isn't coming from this one
+		if (myself.compare(neighbor) && neighbors->count(neighbor) == 0) {
+			char ip[INET_ADDRSTRLEN];
+
+			inet_ntop(AF_INET, &(peer.sin_addr), ip, INET_ADDRSTRLEN);
+							
+			connectToNeighbor(neighbor, std::string(ip), atoi(splits[2].c_str()));
+		}
+		return NO_RESPONSE;
+	}
+	cnLog->debug("Invalid TCP request: " + str);
+	return NO_RESPONSE;
+}
+
+/**
  * This method forwards the given string to all local neighbors by default. 
  * If an id is passed, then the message is only forwarded to that CN
  */
 void CommNode::forwardToLocalNeighbors(char* msg, unsigned long int sz, 
-		boost::uuids::uuid id) {
-	if (!id.is_nil()) {
-		write(localNeighbors[id].socketFD, msg, sz);
+		std::string id) {
+	if (id.length() == 0) {
+		write((*localNeighbors)[id].socketFD, msg, sz);
 	} else {
-		for (auto it : localNeighbors) {
+		for (auto& it : *localNeighbors) {
+			cnLog->debug("FORWARDING MESSAGE");
 			int ret = write(it.second.socketFD, msg, sz);
 			if (ret < 0) {
 				cnLog->exitWithError("Unable to write to socket: " + 
@@ -404,7 +546,83 @@ void CommNode::forwardToLocalNeighbors(char* msg, unsigned long int sz,
 	}
 }
 
-bool fromLocalMachine(std::string ip) {
+/**
+ * Gathers information about neighboring nodes
+ */
+void CommNode::runMetrics() {
+	using namespace boost::posix_time;
+
+	//Run metrics on each neighbor
+	for (auto& it : *neighbors) {
+		auto stop = std::chrono::system_clock::now();
+		typedef std::chrono::system_clock::period period_t;
+		auto dur = stop.time_since_epoch();
+	
+		//Write a short message to the neighbor's TCP socket and await response
+		char msg[128];
+		sprintf(msg, "%s %ld", "ping", dur.count());
+		cnLog->debug("WRITING PING: " + std::string(msg));
+		int bytes = write(it.second.socketFD, msg, DGRAM_SIZE);
+		if (bytes <= 0)
+			cnLog->exitWithError("Unable to write to socket for metrics");
+	}
+}
+
+
+/**
+ * Formats neighbor information for printing and writes to a file.
+ */
+void CommNode::printNeighbors() {
+	std::stringstream ss;
+
+	ss << "          NEIGHBOR UUID          " << "|" << 
+		"       ADDRESS       " << "|" << 
+		"LATENCY" << "|" << 
+		"BANDWIDTH" << endl << 
+		"------------------------------------------------------------------------"
+		<< endl;
+
+	for (auto it : *neighbors) {
+		ss << it.second.uuid << "|" << 
+			it.second.ip << ":" << it.second.port << "|" << it.second.latency << 
+			"|" << it.second.bandwidth << endl;
+	}
+
+	std::string filename = std::string(getenv("INSTALL_DIRECTORY")) + 
+		"/nodestatus_" + boost::uuids::to_string(uuid) + ".txt";
+	std::ofstream out;
+
+	out.open(filename, std::ofstream::out | std::ofstream::trunc);
+	out << ss.rdbuf();
+	out.close();
+}
+
+/** 
+ * Gets LAN broadcast IP from ifaddrs
+ */
+static in_addr_t getBroadcastIp() {
+	ifaddrs* allAddrs = NULL;
+	getifaddrs(&allAddrs);
+
+	for (ifaddrs* it = allAddrs; it != NULL; it = it->ifa_next) {
+		//If the ifaddr isn't IPv4 or if 
+		//it is the loopback interface then continue
+		if (it->ifa_addr->sa_family != AF_INET ||
+				strcmp(it->ifa_name, "lo") == 0)
+			continue;
+
+		sockaddr_in* brd = (sockaddr_in*)(it->ifa_ifu.ifu_broadaddr);
+		freeifaddrs(allAddrs);
+		
+		return brd->sin_addr.s_addr;
+	}
+	
+	if (allAddrs != NULL)
+		freeifaddrs(allAddrs);
+	return 0;
+}
+
+static bool fromLocalMachine(std::string ip) {
 	ifaddrs* allAddrs = NULL;
 	getifaddrs(&allAddrs);
 
@@ -427,120 +645,4 @@ bool fromLocalMachine(std::string ip) {
 	}
 
 	return false;
-}
-
-void CommNode::addNeighbor(NeighborInfo n) {
-	//We only want to do anything if the neighbor isn't already in the list
-	if (neighbors.count(n.uuid) == 0) {
-		neighbors[n.uuid] = n;
-
-		n.socketFD = socket(AF_INET, SOCK_STREAM, 0);
-	
-		if (n.socketFD < 0) {
-			cnLog->debug("Unable to open socket");
-		}
-
-		sockaddr_in neighborAddr;
-		int neighborLen = sizeof neighborAddr;
-	
-		memset(&neighborAddr, 0, neighborLen);
-		neighborAddr.sin_family = AF_INET;
-  
-		inet_pton(AF_INET, n.ip.c_str(), &(neighborAddr.sin_addr));
-		neighborAddr.sin_port = htons(n.port);
-	
-		int res = connect(n.socketFD, (const sockaddr*)&neighborAddr, neighborLen);
-		if (res < 0) {
-			cnLog->error("Error connecting to TCP socket: ");
-		}
-
-		cnLog->debug("CONNECTED TO PEER: " + n.ip + ":" + std::to_string(n.port));
-	
-		// See if this neighbor is running on our local machine, if so add them 
-		// to the localNeighbors map
-		if (fromLocalMachine(n.ip) && localNeighbors.count(n.uuid) == 0) {
-			localNeighbors[n.uuid] = n;
-		}
-	}
-}
-
-void CommNode::sendHeartbeat() {
-
-	char buff[512];
-	sprintf(buff, "add %s %d", boost::uuids::to_string(uuid).c_str(), 
-		ntohs(tcpAddr.sin_port));
-	sendto(udpBroadcastFD, buff, strlen(buff), 0, (sockaddr*)&broadcastAddr, 
-		broadcastLen);
-}
-
-/**
- * Gathers information about neighboring nodes
- */
-void CommNode::runMetrics() {
-	using namespace boost::posix_time;
-	ptime start, stop;
-
-	//Run metrics on each neighbor
-	for (auto it : neighbors) {
-		start = second_clock::local_time();
-		
-		//Write a short message to the neighbor's TCP socket and await response
-		const char* msg = "ping";
-		write(it.second.socketFD, msg, strlen(msg));
-		
-		char reply[strlen(msg)];
-		read(it.second.socketFD, &reply, strlen(msg));
-		
-		stop = second_clock::local_time();
-
-		//Get time difference in milliseconds and store it in that neighbor's 
-		//latency info
-		boost::posix_time::time_duration diff = stop - start;
-		it.second.latency = diff.total_milliseconds();
-
-		//reset and start boost timer
-		//send payload
-		//receive payload
-		//stop timer
-		//payload.sizeinbits / 1000 / timerseconds
-		//save time to it->bandwidth
-	}
-}
-
-/**
- * Sends a heartbeat and runs various upkeep code
- */
-void CommNode::update() {
-	sendHeartbeat();
-	cnLog->debug("Still alive...");
-	runMetrics();
-	printNeighbors();
-}
-
-/**
- * Formats neighbor information for printing and writes to a file.
- */
-void CommNode::printNeighbors() {
-	std::stringstream ss;
-
-	ss << "          NEIGHBOR UUID          " << "|" << 
-		"       ADDRESS       " << "|" << 
-		"LATENCY" << "|" << 
-		"BANDWIDTH" << endl << 
-		"------------------------------------------------------------------------"
-		<< endl;
-
-	for (auto it : neighbors) {
-		ss << boost::uuids::to_string(it.second.uuid) << "|" << 
-			it.second.ip << ":" << it.second.port << "|" << it.second.latency << 
-			"|" << it.second.bandwidth << endl;
-	}
-
-	std::string filename = std::string(getenv("INSTALL_DIRECTORY")) + 
-		"/nodestatus_" + boost::uuids::to_string(uuid) + ".txt";
-	std::ofstream out;
-
-	out.open(filename, std::ofstream::out | std::ofstream::trunc);
-	out << ss.rdbuf();
-	out.close();
 }

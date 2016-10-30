@@ -6,6 +6,7 @@
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/nil_generator.hpp>
+#include <boost/algorithm/string.hpp>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -15,8 +16,12 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <sys/poll.h>
+#include <sys/ioctl.h>
 
 /**
  * This class performs the majority of the networking tasks
@@ -24,8 +29,16 @@
  */
 class CommNode {
 	public:
-		//static helper classes to allow member function to act
-		//as a POSIX thread callback
+		/**
+	   * PUBLIC STATICS
+		 */
+		//Our sockets will deliver messages of exactly 128 bytes
+		static const int DGRAM_SIZE = 128;
+		//This string will signal nodes that a TCP conversation is over
+		static const char* NO_RESPONSE;
+
+		//These two static functions let us use member functions as 
+		//POSIX thread callbacks
 		static void* handleBroadcast(void* p) {
 			return static_cast<CommNode*>(p)->handleBroadcast();
 		}
@@ -33,18 +46,27 @@ class CommNode {
 		static void* handleTCP(void* p) {
 			return static_cast<CommNode*>(p)->handleTCP();
 		}
-
+	
+		/**
+		 * CONSTRUCTOR
+		 */
 		CommNode(boost::uuids::uuid id, int port);
-		
-		/*
-		 * These three functions are the controls for the node
+	
+		~CommNode() {
+			delete neighbors;
+			delete localNeighbors;
+		};
+	
+		/**
+		 * CONTROL FUNCTIONS
 		 */
 		void start(); //start transmitting and listening 
 		void stop(); //stop transmitting and listening
 		void update(); //send heartbeat and perform maintenance
 		
-		//These are the only two pieces of information 
-		//outsiders should have access to.
+		/**
+		 * Accessor functions
+		 */
 		boost::uuids::uuid getUUID() { return uuid; };
 		bool isRunning() { return running; };
 
@@ -56,17 +78,17 @@ class CommNode {
 		void initBroadcastServer();
 		void initTCPListener();
 	  void startBroadcastListener();
-		void stopBroadcastListener();
 		void startTCPListener();
 		void* handleBroadcast(void);
 		void* handleTCP(void);
 		void forwardToLocalNeighbors(char* msg, unsigned long int sz, 
-			boost::uuids::uuid id = boost::uuids::nil_uuid());
+			std::string id = "");
 		void sendHeartbeat();
-		void addNeighbor(NeighborInfo n);
+		void connectToNeighbor(std::string id, std::string ip, int port);
 		void printNeighbors();
 		void runMetrics();
-		const char* createTCPResponse(int sockFD, char* buf, unsigned long int sz);
+		std::string createTCPResponse(int sockFD, char* buf, unsigned long int sz);
+
 
 		/**
 		 * Private variables
@@ -79,14 +101,13 @@ class CommNode {
 		int udpListenerFD;						//This socket is for listening to broadcasts
 		int udpBroadcastFD;						//This socket is for writing broadcasts
 		int tcpListenerFD;
-		sockaddr_in listenerAddr;
 		sockaddr_in broadcastAddr;
-		sockaddr_in tcpAddr;
 		std::string broadcastStr;
 		std::string listenerStr;
 		unsigned int broadcastLen;
 		unsigned int listenerLen;
 		unsigned int tcpLen;
+		std::vector<pollfd> fds;
 		pthread_t listenerThread;
 		pthread_t tcpThread;
 		bool isListening;							//We are listening for UDP broadcasts
@@ -94,10 +115,9 @@ class CommNode {
 																	//initialized
 	
 		//This map contains all nodes that can be reached on the LAN
-		std::map<boost::uuids::uuid, NeighborInfo> neighbors;
-
+		std::map<std::string, NeighborInfo> *neighbors;
 		//This map contains only nodes that exist on the same IP address as the
 		//current node
-		std::map<boost::uuids::uuid, NeighborInfo> localNeighbors;
+		std::map<std::string, NeighborInfo> *localNeighbors;
 };
 #endif
