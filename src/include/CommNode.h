@@ -84,7 +84,7 @@ class CommNode {
 		void forwardToLocalNeighbors(char* msg, unsigned long int sz, 
 			std::string id = "");
 		void sendHeartbeat();
-		void connectToNeighbor(std::string id, std::string ip, int port);
+		void connectToNeighbor(NeighborInfo n);
 		void printNeighbors();
 		void runMetrics();
 		std::string createTCPResponse(int sockFD, char* buf, unsigned long int sz);

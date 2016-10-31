@@ -25,7 +25,7 @@ CommNode::CommNode(boost::uuids::uuid id, int port) {
 	
 	initBroadcastListener();
 	initBroadcastServer();
-	//initTCPListener();
+	initTCPListener();
 }
 
 /*
@@ -40,7 +40,7 @@ void CommNode::start() {
 		startBroadcastListener();
 	}
 
-	//startTCPListener();
+	startTCPListener();
 }
 
 /*
@@ -56,7 +56,7 @@ void CommNode::stop() {
 void CommNode::update() {
 	sendHeartbeat();
 	//runMetrics();
-	//printNeighbors();
+	printNeighbors();
 	cnLog->debug("Still alive..." + std::to_string(neighbors->size()));
 }
 
@@ -210,11 +210,12 @@ void* CommNode::handleBroadcast() {
 					n.uuid = neighbor;
 					n.ip = std::string(ip);
 					n.port = portNum;
-					auto res = neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+					auto res = neighbors->insert(
+						std::pair<std::string, NeighborInfo>(n.uuid, n));
 					if (!res.second) {
 						cnLog->exitWithError("Error inserting into map");
 					}
-					//connectToNeighbor(neighbor, std::string(ip), portNum);
+					connectToNeighbor(n);
 				}
   		}
 		}
@@ -237,19 +238,18 @@ void CommNode::sendHeartbeat() {
 		cnLog->exitWithError("Error sending to broadcast socket");
 	}
 }
-//I trust everything above this line
-//I'm kind of meh about everything below this line
 
-//I'm kind of meh about everything above this line
-//I don't trust anything below this line
-#if 0
-void CommNode::addToMapSync(const NeighborInfo& n) {
-	mapMutex.lock();
-	neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
-	mapMutex.unlock();
+/**
+ * This function creates a POSIX thread where the TCP 
+ */
+void CommNode::startTCPListener() {
+	int ret = pthread_create(&tcpThread, NULL, &CommNode::handleTCP, this);	
+	if (ret)
+		cnLog->exitWithError("Error creating TCP thread");
 }
 
-
+//I trust everything above this line
+//I'm kind of meh about everything below this line
 
 /**
  * Initializes a TCP socket and binds it to a random port. This socket will
@@ -311,16 +311,46 @@ void CommNode::initTCPListener() {
 	freeaddrinfo(resInfo);
 }
 
-
 /**
- * This function creates a POSIX thread where the TCP 
+ * Adds other nodes to the neighbors map. Adds nodes running on the 
+ * local machine to the local neighbors map. Also sets up TCP sockets to
+ * each neighbor
  */
-void CommNode::startTCPListener() {
-	int ret = pthread_create(&tcpThread, NULL, &CommNode::handleTCP, this);	
-	if (ret)
-		cnLog->exitWithError("Error creating TCP thread");
-}
+void CommNode::connectToNeighbor(NeighborInfo n) {
+	addrinfo hints, *resInfo;
 
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	hints.ai_flags = 0;
+	
+	int res = getaddrinfo(n.ip.c_str(), std::to_string(n.port).c_str(), 
+		&hints, &resInfo);
+	if (res != 0)
+		cnLog->exitWithError("Error getting TCP addr info: " +
+			std::string(gai_strerror(res)));
+	
+	n.socketFD = socket(resInfo->ai_family, resInfo->ai_socktype, 
+		resInfo->ai_protocol);
+	if (n.socketFD < 0) {
+		cnLog->error("Unable to open socket");
+	}
+	
+	int enable = 1;
+	res = ioctl(n.socketFD, FIONBIO, (char*)&enable);
+	if (res < 0) {
+		cnLog->exitWithError("Error making TCP socket non-blocking");
+	}
+
+	res = connect(n.socketFD, resInfo->ai_addr, resInfo->ai_addrlen);
+	if (res < 0) {
+		if (errno != EINPROGRESS)
+			cnLog->error("Error connecting to TCP socket: ");
+	}
+
+	pollfd poll = { n.socketFD, POLLIN | POLLPRI, 0 };
+	fds.push_back(poll);
+}
 
 /**
  * Polls all of this node's TCP sockets and handles incoming messages
@@ -386,13 +416,14 @@ void* CommNode::handleTCP() {
 								std::to_string(fds[i].fd));
 						}
 						close(fds[i].fd);
+						fds.erase(fds.begin() + i);
 					} else {
-						std::string resp = createTCPResponse(fds[i].fd, buffer, DGRAM_SIZE);
+						/*std::string resp = createTCPResponse(fds[i].fd, buffer, DGRAM_SIZE);
 						if (resp.compare(std::string(NO_RESPONSE))) {
 							int ret = write(fds[i].fd, resp.c_str(), DGRAM_SIZE);
 							if (ret < 0)
 								cnLog->exitWithError("Error writing TCP response");
-						}
+						}*/
 					}
 				}
 			}
@@ -403,45 +434,48 @@ void* CommNode::handleTCP() {
 }
 
 /**
- * Adds other nodes to the neighbors map. Adds nodes running on the 
- * local machine to the local neighbors map. Also sets up TCP sockets to
- * each neighbor
+ * Formats neighbor information for printing and writes to a file.
  */
-void CommNode::connectToNeighbor(std::string id, std::string ip, int port) {
-	addrinfo hints, *resInfo;
+void CommNode::printNeighbors() {
+	std::stringstream ss;
 
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-	hints.ai_flags = 0;
-	
-	int res = getaddrinfo(ip.c_str(), std::to_string(port).c_str(), 
-		&hints, &resInfo);
-	if (res != 0)
-		cnLog->exitWithError("Error getting TCP addr info: " +
-			std::string(gai_strerror(res)));
-	
-	int socketFD = socket(resInfo->ai_family, resInfo->ai_socktype, 
-		resInfo->ai_protocol);
-	if (socketFD < 0) {
-		cnLog->error("Unable to open socket");
-	}
-	
-	int enable = 1;
-	res = ioctl(socketFD, FIONBIO, (char*)&enable);
-	if (res < 0) {
-		cnLog->exitWithError("Error making TCP socket non-blocking");
+	ss << "          NEIGHBOR UUID          " << "|" << 
+		"       ADDRESS       " << "|" << 
+		"LATENCY" << "|" << 
+		"BANDWIDTH" << endl << 
+		"------------------------------------------------------------------------"
+		<< endl;
+
+	for (auto it : *neighbors) {
+		ss << it.second.uuid << "|" << 
+			it.second.ip << ":" << it.second.port << "|" << it.second.latency << 
+			"|" << it.second.bandwidth << endl;
 	}
 
-	res = connect(socketFD, resInfo->ai_addr, resInfo->ai_addrlen);
-	if (res < 0) {
-		if (errno != EINPROGRESS)
-			cnLog->error("Error connecting to TCP socket: ");
-	}
+	std::string filename = std::string(getenv("INSTALL_DIRECTORY")) + 
+		"/nodestatus_" + boost::uuids::to_string(uuid) + ".txt";
+	std::ofstream out;
 
-	pollfd poll = { socketFD, POLLIN | POLLPRI, 0 };
-	fds.push_back(poll);
+	out.open(filename, std::ofstream::out | std::ofstream::trunc);
+	out << ss.rdbuf();
+	out.close();
 }
+//I'm kind of meh about everything above this line
+//I don't trust anything below this line
+#if 0
+void CommNode::addToMapSync(const NeighborInfo& n) {
+	mapMutex.lock();
+	neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+	mapMutex.unlock();
+}
+
+
+
+
+
+
+
+
 
 /**
  * Helper function that handles parsing a TCP recv string
@@ -586,34 +620,6 @@ void CommNode::runMetrics() {
 	}
 }
 
-
-/**
- * Formats neighbor information for printing and writes to a file.
- */
-void CommNode::printNeighbors() {
-	std::stringstream ss;
-
-	ss << "          NEIGHBOR UUID          " << "|" << 
-		"       ADDRESS       " << "|" << 
-		"LATENCY" << "|" << 
-		"BANDWIDTH" << endl << 
-		"------------------------------------------------------------------------"
-		<< endl;
-
-	for (auto it : *neighbors) {
-		ss << it.second.uuid << "|" << 
-			it.second.ip << ":" << it.second.port << "|" << it.second.latency << 
-			"|" << it.second.bandwidth << endl;
-	}
-
-	std::string filename = std::string(getenv("INSTALL_DIRECTORY")) + 
-		"/nodestatus_" + boost::uuids::to_string(uuid) + ".txt";
-	std::ofstream out;
-
-	out.open(filename, std::ofstream::out | std::ofstream::trunc);
-	out << ss.rdbuf();
-	out.close();
-}
 #endif
 
 /** 
