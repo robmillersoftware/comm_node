@@ -22,6 +22,7 @@
 #include <ifaddrs.h>
 #include <sys/poll.h>
 #include <sys/ioctl.h>
+#include <mutex>
 
 /**
  * This class performs the majority of the networking tasks
@@ -69,7 +70,6 @@ class CommNode {
 		 */
 		boost::uuids::uuid getUUID() { return uuid; };
 		bool isRunning() { return running; };
-
 	private:
 		/**
 		 * Private functions
@@ -88,11 +88,12 @@ class CommNode {
 		void printNeighbors();
 		void runMetrics();
 		std::string createTCPResponse(int sockFD, char* buf, unsigned long int sz);
-
+		void addToMapSync(const NeighborInfo& n);
 
 		/**
 		 * Private variables
 		 */
+		std::mutex mapMutex;
 		boost::uuids::uuid uuid;
 		bool running;		
 		int udpPortNumber;

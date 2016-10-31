@@ -5,30 +5,27 @@
  *  Author: Robert Miller
  **/
 
-#include <iostream>
-#include <string>
-#include <stdio.h>
+#include "CommNode.h"
+#include "CommNodeLog.h"
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/ini_parser.hpp>
 #include <stdlib.h>
+#include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/uuid_generators.hpp>
 #include <sys/types.h>
 #include <sys/stat.h>
+/*#include <iostream>
+#include <string>
+#include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "CommNode.h"
-#include "CommNodeLog.h"
 
-//I'm leaning pretty heavily on boost for this application to speed up 
-//development. I acknowledge that there are faster and more lightweight
-//alternatives for some of the things I'm doing. 
-#include <boost/uuid/uuid_io.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/ini_parser.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/algorithm/string.hpp>
-
+*/
 extern CommNodeLog* cnLog;
 boost::property_tree::ptree pt;
 
@@ -97,7 +94,6 @@ int main(int argc, char *argv[]) {
 		sleep(heartbeatIntervalSecs);
 		c.update();
 	}
-
 	cnLog->close();
 }
 

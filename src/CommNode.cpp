@@ -25,7 +25,7 @@ CommNode::CommNode(boost::uuids::uuid id, int port) {
 	
 	initBroadcastListener();
 	initBroadcastServer();
-	initTCPListener();
+	//initTCPListener();
 }
 
 /*
@@ -40,7 +40,7 @@ void CommNode::start() {
 		startBroadcastListener();
 	}
 
-	startTCPListener();
+	//startTCPListener();
 }
 
 /*
@@ -55,26 +55,11 @@ void CommNode::stop() {
  */
 void CommNode::update() {
 	sendHeartbeat();
-	runMetrics();
-	printNeighbors();
+	//runMetrics();
+	//printNeighbors();
 	cnLog->debug("Still alive..." + std::to_string(neighbors->size()));
 }
 
-/**
- * Sends a UDP packet to the broadcast address
- */
-void CommNode::sendHeartbeat() {
-	char buff[DGRAM_SIZE];
-	memset(buff, 0, DGRAM_SIZE);
-	sprintf(buff, "add %s %d", boost::uuids::to_string(uuid).c_str(), 
-		tcpPortNumber);
-	
-	int ret = sendto(udpBroadcastFD, buff, DGRAM_SIZE, 0, 
-		(sockaddr*)&broadcastAddr, broadcastLen);
-	if (ret < 0) {
-		cnLog->exitWithError("Error sending to broadcast socket");
-	}
-}
 /**
  * Sets up a socket that handles incoming UDP messages on the specified port.
  * These messages will be coming from the LAN broadcast IP
@@ -161,6 +146,112 @@ void CommNode::initBroadcastServer() {
 }
 
 /**
+ * This function creates a new POSIX thread where this CN will be listening
+ * for heartbeat messages from other nodes.
+ */
+void CommNode::startBroadcastListener() {
+	int ret = pthread_create(&listenerThread, NULL, &CommNode::handleBroadcast, 
+		this);	
+	if (ret) 
+		cnLog->exitWithError("Error creating broadcast thread");
+}
+
+/**
+ * This function is called by pthread_create when the UDP listener is started
+ * It starts a loop that receives UDP data
+ */
+void* CommNode::handleBroadcast() {
+	cnLog->debug("Listening for UDP messages on port " + 
+		std::to_string(udpPortNumber));
+	
+	while (running) {
+		memset(udpDgram, 0, DGRAM_SIZE);
+		
+		sockaddr_in origin;
+		unsigned int originSize = sizeof origin;
+
+		int ret = recvfrom(udpListenerFD, udpDgram, DGRAM_SIZE, 0, 
+			(sockaddr*)&origin, &originSize);
+		if (ret < 0)
+			cnLog->exitWithError("Error receiving UDP packet");
+
+		//Before doing any processing, forward the message
+		//forwardToLocalNeighbors(udpDgram, DGRAM_SIZE);
+
+		//The format for broadcast dgrams is "command args1 arg2 .. argn"
+		std::string broadcastMsg(udpDgram);
+		std::vector<std::string> splitStrs;
+		boost::split(splitStrs, broadcastMsg, boost::is_any_of("\t "));
+
+		if (splitStrs.size() < 2) {
+			cnLog->error("Malformed broadcast message, too few arguments");
+		} else {	
+			//Message format should be "add uuid tcpport"
+			if (splitStrs[0] == "add" && splitStrs.size() >= 3) {
+				std::string neighbor = splitStrs[1];
+				boost::algorithm::trim(neighbor);
+
+				std::string myself = boost::uuids::to_string(uuid);
+		
+				//Ignore messages originating from this node
+				if (myself.compare(neighbor) == 0) {
+					continue;
+				}
+
+				if (neighbors->count(neighbor) == 0) {
+					char ip[INET_ADDRSTRLEN];
+					inet_ntop(AF_INET, &(origin.sin_addr), ip, INET_ADDRSTRLEN);
+
+					int portNum;
+					std::stringstream convert(splitStrs[2]);
+					convert >> portNum;
+
+					NeighborInfo n;
+					n.uuid = neighbor;
+					n.ip = std::string(ip);
+					n.port = portNum;
+					auto res = neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+					if (!res.second) {
+						cnLog->exitWithError("Error inserting into map");
+					}
+					//connectToNeighbor(neighbor, std::string(ip), portNum);
+				}
+  		}
+		}
+	}	
+	return NULL;
+}
+
+/**
+ * Sends a UDP packet to the broadcast address
+ */
+void CommNode::sendHeartbeat() {
+	char buff[DGRAM_SIZE];
+	memset(buff, 0, DGRAM_SIZE);
+	sprintf(buff, "add %s %d", boost::uuids::to_string(uuid).c_str(), 
+		tcpPortNumber);
+	
+	int ret = sendto(udpBroadcastFD, buff, DGRAM_SIZE, 0, 
+		(sockaddr*)&broadcastAddr, broadcastLen);
+	if (ret < 0) {
+		cnLog->exitWithError("Error sending to broadcast socket");
+	}
+}
+//I trust everything above this line
+//I'm kind of meh about everything below this line
+
+//I'm kind of meh about everything above this line
+//I don't trust anything below this line
+#if 0
+void CommNode::addToMapSync(const NeighborInfo& n) {
+	mapMutex.lock();
+	neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+	mapMutex.unlock();
+}
+
+
+
+/**
  * Initializes a TCP socket and binds it to a random port. This socket will
  * listen for connect() attempts and accept them
  */
@@ -220,16 +311,6 @@ void CommNode::initTCPListener() {
 	freeaddrinfo(resInfo);
 }
 
-/**
- * This function creates a new POSIX thread where this CN will be listening
- * for heartbeat messages from other nodes.
- */
-void CommNode::startBroadcastListener() {
-	int ret = pthread_create(&listenerThread, NULL, &CommNode::handleBroadcast, 
-		this);	
-	if (ret) 
-		cnLog->exitWithError("Error creating broadcast thread");
-}
 
 /**
  * This function creates a POSIX thread where the TCP 
@@ -240,64 +321,6 @@ void CommNode::startTCPListener() {
 		cnLog->exitWithError("Error creating TCP thread");
 }
 
-/**
- * This function is called by pthread_create when the UDP listener is started
- * It starts a loop that receives UDP data
- */
-void* CommNode::handleBroadcast() {
-	cnLog->debug("Listening for UDP messages on port " + 
-		std::to_string(udpPortNumber));
-	
-	while (running) {
-		//Reset the message object
-		memset(udpDgram, 0, DGRAM_SIZE);
-		sockaddr_in origin;
-		unsigned int originSize = sizeof origin;
-
-		int ret = recvfrom(udpListenerFD, udpDgram, DGRAM_SIZE, 0, 
-			(sockaddr*)&origin, &originSize);
-		if (ret < 0)
-			cnLog->exitWithError("Error receiving UDP packet");
-
-		//Before doing any processing, forward the message
-		forwardToLocalNeighbors(udpDgram, DGRAM_SIZE);
-
-		//The format for broadcast dgrams is "command args1 arg2 .. argn"
-		std::string broadcastMsg(udpDgram);
-		std::vector<std::string> splitStrs;
-		boost::split(splitStrs, broadcastMsg, boost::is_any_of("\t "));
-
-		if (splitStrs.size() < 2) {
-			cnLog->error("Malformed broadcast message, too few arguments");
-		} else {	
-			if (splitStrs[0] == "add" && splitStrs.size() >= 3) {
-				std::string neighbor = splitStrs[1];
-				boost::algorithm::trim(neighbor);
-
-				std::string myself = boost::uuids::to_string(uuid);
-
-				cnLog->debug(std::to_string(neighbors->size()));
-				for (auto it : *neighbors) {
-					cnLog->debug(it.second.uuid + " " + it.second.ip + ":" + std::to_string(it.second.port));
-				}
-				//The received packet should have the UUID of the originating node. 
-				//Make sure it isn't coming from this one
-				if (myself.compare(neighbor) && neighbors->count(neighbor) == 0) {
-					char ip[INET_ADDRSTRLEN];
-
-					inet_ntop(AF_INET, &(origin.sin_addr), ip, INET_ADDRSTRLEN);
-					
-					int portNum;
-					std::stringstream convert(splitStrs[2]);
-					convert >> portNum;
-
-					connectToNeighbor(neighbor, std::string(ip), portNum);
-				}
-  		}
-		}
-	}	
-	return NULL;
-}
 
 /**
  * Polls all of this node's TCP sockets and handles incoming messages
@@ -481,7 +504,7 @@ std::string CommNode::createTCPResponse(int sockFD, char* buf,
 
 		n.ip = std::string(ipStr);
 		n.port = ntohs(peer.sin_port);
-		neighbors->insert(std::pair<std::string, NeighborInfo>(n.uuid, n));
+		addToMapSync(n);
 			
 		// See if this neighbor is running on our local machine, if 
 		// so add them to the localNeighbors map
@@ -591,6 +614,7 @@ void CommNode::printNeighbors() {
 	out << ss.rdbuf();
 	out.close();
 }
+#endif
 
 /** 
  * Gets LAN broadcast IP from ifaddrs

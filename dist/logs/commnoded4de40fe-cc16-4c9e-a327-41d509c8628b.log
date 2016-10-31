@@ -1,0 +1,13 @@
+30-Oct-2016 20:30:09 (debug) Launching process with PID: 9655
+
+30-Oct-2016 20:30:09 (debug) Starting node with heartbeat every 10 seconds...
+30-Oct-2016 20:30:09 (debug) Listening for UDP messages on port 8000
+30-Oct-2016 20:30:19 (debug) Still alive...0
+30-Oct-2016 20:30:29 (debug) Still alive...0
+30-Oct-2016 20:30:39 (debug) Still alive...1
+30-Oct-2016 20:30:49 (debug) Still alive...1
+30-Oct-2016 20:30:59 (debug) Still alive...1
+30-Oct-2016 20:31:09 (debug) Still alive...1
+30-Oct-2016 20:31:19 (debug) Still alive...2
+30-Oct-2016 20:31:29 (debug) Still alive...2
+30-Oct-2016 20:31:39 (error) Error sending to broadcast socket: Network is unreachable
