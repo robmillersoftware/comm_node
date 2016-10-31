@@ -84,7 +84,8 @@ class CommNode {
 		void forwardToLocalNeighbors(char* msg, unsigned long int sz, 
 			std::string id = "");
 		void sendHeartbeat();
-		void connectToNeighbor(NeighborInfo n);
+		void addNeighbor(std::string id, std::string ip, int port);
+		void connectToNeighbor(NeighborInfo* n);
 		void printNeighbors();
 		void runMetrics();
 		std::string createTCPResponse(int sockFD, char* buf, unsigned long int sz);
@@ -116,9 +117,9 @@ class CommNode {
 																	//initialized
 	
 		//This map contains all nodes that can be reached on the LAN
-		std::map<std::string, NeighborInfo> *neighbors;
+		std::map<std::string, NeighborInfo*> *neighbors;
 		//This map contains only nodes that exist on the same IP address as the
 		//current node
-		std::map<std::string, NeighborInfo> *localNeighbors;
+		std::map<std::string, NeighborInfo*> *localNeighbors;
 };
 #endif
