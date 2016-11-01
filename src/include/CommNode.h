@@ -38,7 +38,7 @@ class CommNode {
 		//This string will signal nodes that a TCP conversation is over
 		static const char* NO_RESPONSE;
 
-		//These two static functions let us use member functions as 
+		//These functions let us use member functions as 
 		//POSIX thread callbacks
 		static void* handleBroadcast(void* p) {
 			return static_cast<CommNode*>(p)->handleBroadcast();
@@ -48,8 +48,23 @@ class CommNode {
 			return static_cast<CommNode*>(p)->handleTCP();
 		}
 	
+		static void* newNeighborHandler(void *arg) {
+			return static_cast<CommNode*>(arg)->newNeighborHandler();
+		}
+
+		static void* incomingMessageHandler(void *arg) {
+			std::pair<int, CommNode*> *params = 
+				static_cast<std::pair<int, CommNode*>*>(arg);
+
+			return params->second->incomingMessageHandler(params->first);
+		}
+
+		static void* runMetrics(void *arg) {
+			return static_cast<CommNode*>(arg)->runMetrics();
+		}
+
 		/**
-		 * CONSTRUCTOR
+		 * CONSTRUCTOR & DESTRUCTOR
 		 */
 		CommNode(boost::uuids::uuid id, int port);
 	
@@ -81,19 +96,25 @@ class CommNode {
 		void startTCPListener();
 		void* handleBroadcast(void);
 		void* handleTCP(void);
+		void* newNeighborHandler(void);
+		void* incomingMessageHandler(int i);
 		void forwardToLocalNeighbors(char* msg, unsigned long int sz, 
 			std::string id = "");
 		void sendHeartbeat();
-		void addNeighbor(std::string id, std::string ip, int port);
+		void addNeighborAsync(std::string id, std::string ip, int port, 
+			int fd = -1);
 		void connectToNeighbor(NeighborInfo* n);
 		void printNeighbors();
-		void runMetrics();
+		void* runMetrics();
 		std::string createTCPResponse(int sockFD, char* buf, unsigned long int sz);
-		void addToMapSync(const NeighborInfo& n);
-
+		void addToPollsAsync(int sock, short int flags);
+		void modifyXferQueueAsync(int fd, std::string msg);
+		
 		/**
 		 * Private variables
 		 */
+		std::mutex xferMutex;
+		std::mutex fdMutex;
 		std::mutex mapMutex;
 		boost::uuids::uuid uuid;
 		bool running;		
@@ -110,8 +131,9 @@ class CommNode {
 		unsigned int listenerLen;
 		unsigned int tcpLen;
 		std::vector<pollfd> fds;
-		pthread_t listenerThread;
+		pthread_t udpThread;
 		pthread_t tcpThread;
+		std::map<int,std::string> transferQueue; //Holds messages waiting to be sent
 		bool isListening;							//We are listening for UDP broadcasts
 		unsigned short tcpPort; 			//This is assigned when the TCP listener is 
 																	//initialized

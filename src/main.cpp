@@ -14,18 +14,7 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <sys/types.h>
 #include <sys/stat.h>
-/*#include <iostream>
-#include <string>
-#include <stdio.h>
-#include <fcntl.h>
-#include <unistd.h>
 
-
-#include <boost/lexical_cast.hpp>
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/path.hpp>
-#include <boost/algorithm/string.hpp>
-*/
 extern CommNodeLog* cnLog;
 boost::property_tree::ptree pt;
 
@@ -79,12 +68,11 @@ int main(int argc, char *argv[]) {
 	ssPath << std::string(installDir) << "/logs/" << logFileName;
 	cnLog->init(ssPath.str());
 
-	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
-		"Launching process with PID: " + std::to_string(::getpid()) + "\n");
-	cnLog->writeMessage(CommNodeLog::severities::CN_DEBUG, 
-		"Starting node with heartbeat every " + 
-		std::to_string(heartbeatIntervalSecs) + 
-		" seconds...");
+	cnLog->debug("Launching process with PID: " + 
+		std::to_string(::getpid()));
+	cnLog->debug("Node UUID is " + boost::uuids::to_string(nodeId));
+	cnLog->debug("Starting node with heartbeat every " + 
+		std::to_string(heartbeatIntervalSecs) + " seconds...");
 
 	//We're now set up as a service, create node object and begin
 	CommNode c(nodeId, portNumber);

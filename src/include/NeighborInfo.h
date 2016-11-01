@@ -11,7 +11,7 @@ class NeighborInfo {
 		unsigned short port;					//Neighbor's TCP port number
 		int socketFD = -1;						//TCP socket file descriptor
 		long latency;									//latency in milliseconds
-		long bandwidth;								//potential bandwidth in kbps
+		float bandwidth;								//potential bandwidth in kbps
 };
 
 #endif

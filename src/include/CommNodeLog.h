@@ -3,6 +3,7 @@
 
 #include <string>
 #include <fstream>
+#include <mutex>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/posix_time/posix_time_io.hpp>
 #include <boost/filesystem.hpp>
@@ -27,33 +28,6 @@ class CommNodeLog {
 			return instance;
 		}
 		
-		/**
-		 * Writes a message to the log with the passed in severity, current time, and
-		 * the message parameter.
-		 * @param sev This is an entry from the CommNodeLog::severities enum
-		 * @param msg The message the user wants to display in the log
-		 */
-		void writeMessage(severities sev, string msg) {
-			if (!fileStream.is_open()) {
-				if (logFilePath.length() == 0) {
-					cout << "Log file path not set. Call init() before trying " 
-							 << "to write to the log.";
-				} else {
-					cout << "Unable to open log file at path: " << logFilePath;
-				}
-				return;
-			}
-
-			using namespace boost::posix_time;
-
-			time_facet* facet = new time_facet("%d-%b-%Y %H:%M:%S");
-			fileStream.imbue(locale(fileStream.getloc(), facet));
-	
-			//The format is "day-month-year H:M:S (severity) message"
-			fileStream << second_clock::local_time() << " (" << 
-				getSevString(sev) << ") " << msg << endl;
-			fileStream.flush();
-		}
 
 		/**
 		 * Creates the directory for the log file if it doesn't already exist. Also 
@@ -123,10 +97,41 @@ class CommNodeLog {
 		}
 
 	private:
+		std::mutex writeMutex;
 		static CommNodeLog* instance;
 		ofstream fileStream;
 		string logFilePath = "";
 		explicit CommNodeLog() {
+		}
+
+		/**
+		 * Writes a message to the log with the passed in severity, current time, 
+		 * and the message parameter. It uses a simple lock_guard to make writing
+		 * thread-safe.
+		 * @param sev This is an entry from the CommNodeLog::severities enum
+		 * @param msg The message the user wants to display in the log
+		 */
+		void writeMessage(severities sev, string msg) {
+			std::lock_guard<std::mutex> lock(writeMutex);
+			if (!fileStream.is_open()) {
+				if (logFilePath.length() == 0) {
+					cout << "Log file path not set. Call init() before trying " 
+							 << "to write to the log.";
+				} else {
+					cout << "Unable to open log file at path: " << logFilePath;
+				}
+				return;
+			}
+
+			using namespace boost::posix_time;
+
+			time_facet* facet = new time_facet("%d-%b-%Y %H:%M:%S");
+			fileStream.imbue(locale(fileStream.getloc(), facet));
+	
+			//The format is "day-month-year H:M:S (severity) message"
+			fileStream << second_clock::local_time() << " (" << 
+				getSevString(sev) << ") " << msg << endl;
+			fileStream.flush();
 		}
 
 		string getSevString(severities sev) {
